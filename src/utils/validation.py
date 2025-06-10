@@ -1,0 +1,212 @@
+"""Input validation utilities for Excel to PowerPoint Merger."""
+
+import re
+from typing import Any, Dict, List, Optional, Union
+import jsonschema
+from jsonschema import validate, ValidationError as JsonSchemaValidationError
+
+from .exceptions import ValidationError
+
+
+def validate_json_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    """Validate data against JSON schema."""
+    try:
+        validate(instance=data, schema=schema)
+    except JsonSchemaValidationError as e:
+        raise ValidationError(f"Schema validation failed: {e.message}")
+
+
+def validate_config_structure(config: Dict[str, Any]) -> None:
+    """Validate configuration structure."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "version": {"type": "string"},
+            "sheet_configs": {
+                "type": "object",
+                "patternProperties": {
+                    ".*": {
+                        "type": "object",
+                        "properties": {
+                            "subtables": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "type": {"type": "string", "enum": ["key_value_pairs", "table"]},
+                                        "header_search": {
+                                            "type": "object",
+                                            "properties": {
+                                                "method": {"type": "string"},
+                                                "text": {"type": "string"},
+                                                "column": {"type": "string"},
+                                                "search_range": {"type": "string"}
+                                            },
+                                            "required": ["method"]
+                                        },
+                                        "data_extraction": {
+                                            "type": "object",
+                                            "properties": {
+                                                "orientation": {"type": "string", "enum": ["horizontal", "vertical"]},
+                                                "headers_row_offset": {"type": "integer"},
+                                                "data_row_offset": {"type": "integer"},
+                                                "max_columns": {"type": "integer"},
+                                                "max_rows": {"type": "integer"},
+                                                "column_mappings": {"type": "object"}
+                                            }
+                                        }
+                                    },
+                                    "required": ["name", "type", "header_search", "data_extraction"]
+                                }
+                            }
+                        },
+                        "required": ["subtables"]
+                    }
+                }
+            },
+            "global_settings": {
+                "type": "object",
+                "properties": {
+                    "normalize_keys": {"type": "boolean"},
+                    "temp_file_cleanup": {
+                        "type": "object",
+                        "properties": {
+                            "enabled": {"type": "boolean"},
+                            "delay_seconds": {"type": "integer"},
+                            "keep_on_error": {"type": "boolean"},
+                            "development_mode": {"type": "boolean"}
+                        }
+                    }
+                }
+            }
+        },
+        "required": ["version", "sheet_configs"]
+    }
+    
+    validate_json_schema(config, schema)
+
+
+def validate_merge_fields(template_text: str) -> List[str]:
+    """Extract and validate merge fields from template text."""
+    merge_field_pattern = r'\{\{([^}]+)\}\}'
+    fields = re.findall(merge_field_pattern, template_text)
+    
+    validated_fields = []
+    for field in fields:
+        field = field.strip()
+        if field:
+            # Validate field name format
+            if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*$', field):
+                raise ValidationError(f"Invalid merge field format: {{{{{field}}}}}")
+            validated_fields.append(field)
+    
+    return validated_fields
+
+
+def normalize_column_name(column_name: str) -> str:
+    """Normalize Excel column names to valid JSON keys."""
+    if not column_name or not isinstance(column_name, str):
+        return "unnamed_column"
+    
+    # Convert to lowercase
+    normalized = column_name.lower().strip()
+    
+    # Replace spaces and special characters with underscores
+    normalized = re.sub(r'[^\w]+', '_', normalized)
+    
+    # Remove multiple underscores
+    normalized = re.sub(r'_+', '_', normalized)
+    
+    # Remove leading/trailing underscores
+    normalized = normalized.strip('_')
+    
+    # Ensure it starts with a letter or underscore
+    if normalized and not re.match(r'^[a-zA-Z_]', normalized):
+        normalized = f'col_{normalized}'
+    
+    return normalized or "unnamed_column"
+
+
+def validate_cell_range(cell_range: str) -> bool:
+    """Validate Excel cell range format."""
+    if not cell_range:
+        return False
+    
+    # Pattern for cell range like A1:B10 or A1
+    pattern = r'^[A-Z]+\d+(:[A-Z]+\d+)?$'
+    return bool(re.match(pattern, cell_range.upper()))
+
+
+def validate_column_reference(column_ref: str) -> bool:
+    """Validate Excel column reference format."""
+    if not column_ref:
+        return False
+    
+    # Pattern for column reference like A, B, AA, etc.
+    pattern = r'^[A-Z]+$'
+    return bool(re.match(pattern, column_ref.upper()))
+
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitize filename for safe file system usage."""
+    if not filename:
+        return "unnamed_file"
+    
+    # Remove or replace dangerous characters
+    sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    
+    # Remove control characters
+    sanitized = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', sanitized)
+    
+    # Limit length
+    sanitized = sanitized[:255]
+    
+    # Ensure not empty
+    return sanitized or "unnamed_file"
+
+
+def validate_data_type(value: Any, expected_type: type) -> bool:
+    """Validate if value matches expected type."""
+    try:
+        if expected_type == str:
+            return isinstance(value, (str, int, float)) or value is None
+        elif expected_type == int:
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        elif expected_type == float:
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        elif expected_type == bool:
+            return isinstance(value, bool)
+        else:
+            return isinstance(value, expected_type)
+    except Exception:
+        return False
+
+
+def validate_api_request(request_data: Dict[str, Any]) -> None:
+    """Validate API request data structure."""
+    if not isinstance(request_data, dict):
+        raise ValidationError("Request data must be a JSON object")
+    
+    # Check for required files
+    if 'excel_file' not in request_data and 'pptx_file' not in request_data:
+        raise ValidationError("Both excel_file and pptx_file are required")
+    
+    # Validate configuration if provided
+    if 'config' in request_data:
+        if not isinstance(request_data['config'], dict):
+            raise ValidationError("Configuration must be a JSON object")
+
+
+def is_empty_cell_value(value: Any) -> bool:
+    """Check if cell value should be considered empty."""
+    if value is None:
+        return True
+    
+    if isinstance(value, str):
+        return not value.strip()
+    
+    if isinstance(value, (int, float)):
+        return False  # Numbers are never considered empty
+    
+    return not bool(value)

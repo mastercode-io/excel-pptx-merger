@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  excel-pptx-merger:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "5000:8080"
+    environment:
+      - ENVIRONMENT=development
+      - DEVELOPMENT_MODE=true
+      - LOG_LEVEL=DEBUG
+      - CLEANUP_TEMP_FILES=false
+      - TEMP_FILE_RETENTION_SECONDS=3600
+      - MAX_FILE_SIZE_MB=50
+      - ALLOWED_EXTENSIONS=xlsx,pptx
+      - API_KEY=dev_api_key_12345
+    volumes:
+      - ../src:/app/src:ro
+      - ../config:/app/config:ro
+      - temp_files:/tmp/excel_pptx_merger
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Optional: Redis for caching (future enhancement)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    profiles:
+      - cache
+
+  # Optional: PostgreSQL for configuration storage (future enhancement)
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=excel_pptx_merger
+      - POSTGRES_USER=app_user
+      - POSTGRES_PASSWORD=app_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    profiles:
+      - database
+
+volumes:
+  temp_files:
+  redis_data:
+  postgres_data:

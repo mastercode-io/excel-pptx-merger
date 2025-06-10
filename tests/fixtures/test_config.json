@@ -1,0 +1,71 @@
+{
+  "version": "1.0",
+  "sheet_configs": {
+    "TestSheet": {
+      "subtables": [
+        {
+          "name": "test_client_info",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Client",
+            "column": "A",
+            "search_range": "A1:A5"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 3,
+            "column_mappings": {
+              "Client": "client_name",
+              "Type": "client_type",
+              "Date": "created_date"
+            }
+          }
+        },
+        {
+          "name": "test_data_table",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Data",
+            "column": "A",
+            "search_range": "A5:A10"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 3,
+            "max_rows": 5,
+            "column_mappings": {
+              "ID": "id",
+              "Name": "name",
+              "Value": "value"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "global_settings": {
+    "normalize_keys": true,
+    "temp_file_cleanup": {
+      "enabled": false,
+      "delay_seconds": 60,
+      "keep_on_error": true,
+      "development_mode": true
+    },
+    "image_extraction": {
+      "enabled": true,
+      "formats": ["png", "jpg"],
+      "max_size_mb": 5
+    },
+    "validation": {
+      "strict_mode": false,
+      "allow_empty_values": true,
+      "required_fields": []
+    }
+  }
+}

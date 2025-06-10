@@ -1,0 +1,157 @@
+{
+  "version": "1.0",
+  "sheet_configs": {
+    "Order Form": {
+      "subtables": [
+        {
+          "name": "client_info",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Client",
+            "column": "A",
+            "search_range": "A1:A10"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 6,
+            "column_mappings": {
+              "Client": "client_name",
+              "Word Or Image": "search_type",
+              "Date": "order_date",
+              "Contact": "contact_person"
+            }
+          }
+        },
+        {
+          "name": "trademark_classes",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Class",
+            "column": "A",
+            "search_range": "A10:A30"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 5,
+            "max_rows": 20,
+            "column_mappings": {
+              "Class": "class_number",
+              "Description": "class_description",
+              "Goods/Services": "goods_services",
+              "Priority": "priority_level",
+              "Status": "application_status"
+            }
+          }
+        },
+        {
+          "name": "fee_information",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Fee",
+            "column": "A",
+            "search_range": "A30:A50"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 2,
+            "column_mappings": {
+              "Base Fee": "base_fee",
+              "Class Fee": "class_fee",
+              "Total": "total_fee",
+              "Payment Method": "payment_method"
+            }
+          }
+        }
+      ]
+    },
+    "Application Details": {
+      "subtables": [
+        {
+          "name": "applicant_details",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Applicant",
+            "column": "A",
+            "search_range": "A1:A15"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 2,
+            "column_mappings": {
+              "Company Name": "company_name",
+              "Address": "address",
+              "City": "city",
+              "State": "state",
+              "ZIP Code": "zip_code",
+              "Country": "country",
+              "Phone": "phone",
+              "Email": "email"
+            }
+          }
+        },
+        {
+          "name": "trademark_details",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Trademark",
+            "column": "A",
+            "search_range": "A15:A30"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 2,
+            "column_mappings": {
+              "Mark": "trademark_mark",
+              "Type": "mark_type",
+              "Description": "mark_description",
+              "First Use Date": "first_use_date",
+              "Commercial Use Date": "commercial_use_date"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "global_settings": {
+    "normalize_keys": true,
+    "temp_file_cleanup": {
+      "enabled": true,
+      "delay_seconds": 300,
+      "keep_on_error": true,
+      "development_mode": false
+    },
+    "image_extraction": {
+      "enabled": true,
+      "formats": ["png", "jpg", "jpeg", "gif"],
+      "max_size_mb": 10,
+      "preserve_aspect_ratio": true
+    },
+    "validation": {
+      "strict_mode": false,
+      "allow_empty_values": true,
+      "required_fields": ["client_name"],
+      "data_type_validation": false
+    },
+    "output_formatting": {
+      "date_format": "%Y-%m-%d",
+      "currency_format": "$%.2f",
+      "number_format": "%.2f",
+      "text_encoding": "utf-8"
+    }
+  }
+}
