@@ -5,6 +5,7 @@ Run this to generate test files for the Excel to PowerPoint Merger project
 """
 
 import os
+import re
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
@@ -13,6 +14,27 @@ from pptx.util import Inches
 from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFont
 import io
+
+
+def normalize_key(key):
+    """Normalize column key by converting to lowercase and replacing spaces with underscores."""
+    if not key:
+        return ""
+    # Convert to lowercase and replace spaces with underscores
+    normalized = key.lower().replace(' ', '_')
+    # Remove special characters
+    normalized = re.sub(r'[^\w_]', '', normalized)
+    return normalized
+
+
+def normalize_image_filename(sheet_name, idx, format_name):
+    """Normalize image filename for consistency and reliability."""
+    # Normalize sheet name: lowercase, replace spaces with underscores, remove special chars
+    normalized_sheet = re.sub(r'[^\w_]', '', sheet_name.lower().replace(' ', '_'))
+    # Ensure format is lowercase and without leading dot
+    format_lower = format_name.lower().lstrip('.')
+    # Create normalized filename
+    return f"{normalized_sheet}_image_{idx}.{format_lower}"
 
 
 def create_sample_excel(output_path="tests/fixtures/sample_excel.xlsx"):
@@ -96,7 +118,9 @@ def create_and_embed_images(workbook, worksheet):
             font = ImageFont.load_default()
 
         draw1.text((75, 40), "LOGO", fill='white', anchor='mm', font=font)
-        img1_path = os.path.join(temp_dir, "sample_logo.png")
+        # Use normalized filename
+        img1_filename = normalize_image_filename("Order Form", 1, "png")
+        img1_path = os.path.join(temp_dir, img1_filename)
         img1.save(img1_path)
 
         # Create second sample image (symbol-style)
@@ -105,7 +129,9 @@ def create_and_embed_images(workbook, worksheet):
         # Draw a simple geometric shape
         draw2.ellipse([20, 20, 100, 100], fill='white', outline='#70AD47', width=3)
         draw2.text((60, 60), "®", fill='#70AD47', anchor='mm', font=font)
-        img2_path = os.path.join(temp_dir, "sample_symbol.png")
+        # Use normalized filename
+        img2_filename = normalize_image_filename("Order Form", 2, "png")
+        img2_path = os.path.join(temp_dir, img2_filename)
         img2.save(img2_path)
 
         # Embed images in Excel
@@ -125,6 +151,8 @@ def create_and_embed_images(workbook, worksheet):
             worksheet.add_image(img2_xl)
 
             print("✅ Embedded sample images in Excel file")
+            print(f"   - Image 1: {img1_filename} at cell A10")
+            print(f"   - Image 2: {img2_filename} at cell A11")
 
         except Exception as e:
             print(f"⚠️  Warning: Could not embed images in Excel: {e}")
@@ -164,12 +192,13 @@ def create_sample_powerpoint(output_path="tests/fixtures/sample_template.pptx"):
     content2 = slide2.placeholders[1]
 
     title2.text = "Client Information"
+    # Updated field names to match normalized keys
     content2.text = """Client Name: {{order_form.client_info.client_name}}
 Search Type: {{order_form.client_info.search_type}}
-G&S Classes: {{order_form.client_info.g_s_classes}}
-SIC Code: {{order_form.client_info.sic}}
-Business Nature: {{order_form.client_info.nature_of_business}}
-Target Countries: {{order_form.client_info.designated_countries}}"""
+G&S Classes: {{order_form.client_info.gs_classes}}
+SIC Code: {{order_form.client_info.sic_code}}
+Business Nature: {{order_form.client_info.business_nature}}
+Target Countries: {{order_form.client_info.countries}}"""
 
     # Slide 3: Word Search Results
     slide3 = prs.slides.add_slide(prs.slide_layouts[1])
@@ -202,22 +231,25 @@ Remarks: {{order_form.word_search.2.remarks}}"""
     # Add content textbox
     content_box = slide4.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(4), Inches(2))
     content_frame = content_box.text_frame
+    # Updated field names to match normalized keys
     content_frame.text = """Image Search Criteria:
 
 {{order_form.image_search.0.search_criteria}}
-Class: {{order_form.image_search.0.image_class_division_subdivision}}
+Class: {{order_form.image_search.0.image_classification}}
 
 {{order_form.image_search.1.search_criteria}}
-Class: {{order_form.image_search.1.image_class_division_subdivision}}"""
+Class: {{order_form.image_search.1.image_classification}}"""
 
-    # Add image placeholders
+    # Add image placeholders using the new format
     img1_placeholder = slide4.shapes.add_textbox(Inches(5.5), Inches(1.5), Inches(3), Inches(2))
     img1_frame = img1_placeholder.text_frame
-    img1_frame.text = "{{order_form.image_search.0.image}}"
+    # Use the image placeholder pattern from config
+    img1_frame.text = "{{image:order_form_image_1.png}}"
 
     img2_placeholder = slide4.shapes.add_textbox(Inches(5.5), Inches(4), Inches(3), Inches(2))
     img2_frame = img2_placeholder.text_frame
-    img2_frame.text = "{{order_form.image_search.1.image}}"
+    # Use the image placeholder pattern from config
+    img2_frame.text = "{{image:order_form_image_2.png}}"
 
     # Slide 5: Summary
     slide5 = prs.slides.add_slide(prs.slide_layouts[1])
@@ -225,11 +257,12 @@ Class: {{order_form.image_search.1.image_class_division_subdivision}}"""
     content5 = slide5.placeholders[1]
 
     title5.text = "Search Summary"
+    # Updated field names to match normalized keys
     content5.text = """Search completed for {{order_form.client_info.client_name}}
 
-Business Type: {{order_form.client_info.nature_of_business}}
-SIC Code: {{order_form.client_info.sic}}
-Target Markets: {{order_form.client_info.designated_countries}}
+Business Type: {{order_form.client_info.business_nature}}
+SIC Code: {{order_form.client_info.sic_code}}
+Target Markets: {{order_form.client_info.countries}}
 
 This report covers both word and image searches
 as requested for trademark clearance purposes."""
@@ -262,8 +295,8 @@ def create_test_files():
     print("3. Try the sample files:")
     print("   curl -X POST http://localhost:8080/api/v1/merge \\")
     print("     -F 'excel_file=@tests/fixtures/sample_excel.xlsx' \\")
-    print("     -F 'pptx_template=@tests/fixtures/sample_template.pptx' \\")
-    print("     -F 'keep_temp_files=true' \\")
+    print("     -F 'pptx_file=@tests/fixtures/sample_template.pptx' \\")
+    print("     -F 'config=@tests/fixtures/default_config.json' \\")
     print("     -o 'sample_output.pptx'")
 
 

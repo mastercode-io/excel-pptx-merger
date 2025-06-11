@@ -3,16 +3,171 @@
     "client_info": {
       "client_name": "Acme Corporation Ltd",
       "search_type": "Word",
-      "g_s_classes": "9, 35, 42",
-      "sic": "62012",
-      "nature_of_business": "Software Development & Consulting",
-      "designated_countries": "United Kingdom, United States"
+      "gs_classes": "9, 35, 42",
+      "sic_code": "62012",
+      "business_nature": "Software Development & Consulting",
+      "countries": "United Kingdom, United States"
     },
-    "trademark_classes": {}
+    "word_search": [
+      {
+        "word": "ACME",
+        "search_criteria": "Identical/Similar",
+        "remarks": "Company name search"
+      },
+      {
+        "word": "SOFTWARE",
+        "search_criteria": "Phonetic",
+        "remarks": "Industry term"
+      },
+      {
+        "word": "SOLUTIONS",
+        "search_criteria": "Similar",
+        "remarks": "Service description"
+      }
+    ],
+    "image_search": [
+      {
+        "image_will_be_here": "[Image will be here]",
+        "logo_brand_search": "Symbol search",
+        "col_26_01_01": "26.01.03"
+      }
+    ]
+  },
+  "__debug_image_references": {
+    "Order Form": [
+      {
+        "original_path": "/var/folders/h3/9_bx10sj2v157tdw7_p4fgx40000gn/T/excel_pptx_merger_u486q12b/order_form_image_1.png",
+        "debug_path": "tests/fixtures/images/order_form_image_1.png",
+        "filename": "order_form_image_1.png",
+        "index": 1,
+        "sheet": "Order Form",
+        "position": {
+          "anchor_type": "OneCellAnchor",
+          "from_cell": "A10",
+          "to_cell": null,
+          "coordinates": {
+            "from": {
+              "col": 0,
+              "row": 9
+            }
+          },
+          "estimated_cell": "A10",
+          "size_info": {
+            "column_span": 1,
+            "row_span": 1
+          }
+        },
+        "size": {
+          "width": 150,
+          "height": 80
+        },
+        "format": "png"
+      },
+      {
+        "original_path": "/var/folders/h3/9_bx10sj2v157tdw7_p4fgx40000gn/T/excel_pptx_merger_u486q12b/order_form_image_2.png",
+        "debug_path": "tests/fixtures/images/order_form_image_2.png",
+        "filename": "order_form_image_2.png",
+        "index": 2,
+        "sheet": "Order Form",
+        "position": {
+          "anchor_type": "OneCellAnchor",
+          "from_cell": "A11",
+          "to_cell": null,
+          "coordinates": {
+            "from": {
+              "col": 0,
+              "row": 10
+            }
+          },
+          "estimated_cell": "A11",
+          "size_info": {
+            "column_span": 1,
+            "row_span": 1
+          }
+        },
+        "size": {
+          "width": 120,
+          "height": 120
+        },
+        "format": "png"
+      }
+    ]
+  },
+  "__debug_image_summary": {
+    "total_images": 2,
+    "sheets": {
+      "Order Form": {
+        "count": 2,
+        "images": [
+          {
+            "filename": "order_form_image_1.png",
+            "index": 1,
+            "format": "png",
+            "size": {
+              "width": 150,
+              "height": 80
+            },
+            "position": {
+              "anchor_type": "OneCellAnchor",
+              "from_cell": "A10",
+              "to_cell": null,
+              "coordinates": {
+                "from": {
+                  "col": 0,
+                  "row": 9
+                }
+              },
+              "estimated_cell": "A10",
+              "size_info": {
+                "column_span": 1,
+                "row_span": 1
+              }
+            }
+          },
+          {
+            "filename": "order_form_image_2.png",
+            "index": 2,
+            "format": "png",
+            "size": {
+              "width": 120,
+              "height": 120
+            },
+            "position": {
+              "anchor_type": "OneCellAnchor",
+              "from_cell": "A11",
+              "to_cell": null,
+              "coordinates": {
+                "from": {
+                  "col": 0,
+                  "row": 10
+                }
+              },
+              "estimated_cell": "A11",
+              "size_info": {
+                "column_span": 1,
+                "row_span": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    "position_info": {
+      "images_with_position": 2,
+      "images_without_position": 0,
+      "anchor_types": {
+        "OneCellAnchor": 2
+      }
+    }
   },
   "__debug_metadata": {
-    "timestamp": "2025-06-11T16:27:35.344321",
-    "temp_directory": "/var/folders/h3/9_bx10sj2v157tdw7_p4fgx40000gn/T/excel_pptx_merger_zmm2quor",
-    "base_filename": "sample_excel"
+    "timestamp": "2025-06-11T23:50:51.293898",
+    "temp_directory": "/var/folders/h3/9_bx10sj2v157tdw7_p4fgx40000gn/T/excel_pptx_merger_u486q12b",
+    "base_filename": "sample_excel",
+    "enhanced_features": {
+      "image_position_extraction": true,
+      "position_based_matching": true,
+      "format_detection": true
+    }
   }
 }

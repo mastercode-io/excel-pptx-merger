@@ -1,0 +1,124 @@
+{
+  "version": "1.0",
+  "sheet_configs": {
+    "Order Form": {
+      "subtables": [
+        {
+          "name": "client_info",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Client",
+            "column": "A",
+            "search_range": "A1:A10"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 6,
+            "column_mappings": {
+              "Client": "client_name",
+              "Word Or Image": "search_type",
+              "G&S Classes": "gs_classes",
+              "SIC": "sic_code",
+              "Nature of business": "business_nature",
+              "Designated Countries": "countries"
+            }
+          }
+        },
+        {
+          "name": "word_search",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Word",
+            "column": "A",
+            "search_range": "A1:A20"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 3,
+            "max_rows": 10,
+            "column_mappings": {
+              "Word": "word",
+              "Search Criteria": "search_criteria",
+              "Remarks": "remarks"
+            }
+          }
+        },
+        {
+          "name": "image_search",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Image",
+            "column": "A",
+            "search_range": "A10:A30"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 3,
+            "max_rows": 10,
+            "column_mappings": {
+              "Image": "image",
+              "Search Criteria": "search_criteria",
+              "Image Class.Division.Subdivision": "image_classification"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "global_settings": {
+    "normalize_keys": true,
+    "temp_file_cleanup": {
+      "enabled": true,
+      "delay_seconds": 300,
+      "keep_on_error": true,
+      "development_mode": false
+    },
+    "image_extraction": {
+      "enabled": true,
+      "preserve_format": true,
+      "extract_position": true,
+      "fallback_format": "png",
+      "max_size_mb": 10,
+      "supported_formats": ["png", "jpg", "jpeg", "gif", "webp"],
+      "position_matching": {
+        "enabled": true,
+        "confidence_threshold": 0.3,
+        "prefer_position_over_index": true
+      },
+      "debug_mode": {
+        "save_position_info": true,
+        "log_anchor_details": true,
+        "create_summary": true
+      }
+    },
+    "validation": {
+      "strict_mode": false,
+      "allow_empty_values": true,
+      "required_fields": [],
+      "validate_image_placeholders": true
+    },
+    "powerpoint_processing": {
+      "image_placeholder_patterns": [
+        "\\{\\{.*image.*\\}\\}",
+        "\\{\\{.*img.*\\}\\}",
+        "\\{\\{.*photo.*\\}\\}",
+        "\\{\\{.*picture.*\\}\\}"
+      ],
+      "auto_resize_images": true,
+      "maintain_aspect_ratio": true,
+      "default_image_size": {
+        "width_inches": 2.0,
+        "height_inches": 2.0
+      }
+    }
+  }
+}
