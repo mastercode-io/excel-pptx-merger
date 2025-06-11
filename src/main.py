@@ -52,6 +52,11 @@ def setup_logging() -> None:
 
 def authenticate_request() -> bool:
     """Authenticate API request."""
+    # Skip authentication in development mode
+    if app_config.get('development_mode', False):
+        logger.debug("Authentication bypassed in development mode")
+        return True
+        
     api_key = app_config.get('api_key')
     if not api_key:
         return True  # No authentication required if no key configured
@@ -220,6 +225,15 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             
             # Merge data into template
             merged_file_path = pptx_processor.merge_data(extracted_data, output_path, images)
+            
+            # In development mode, also save a copy to tests/fixtures
+            if app_config.get('development_mode', False):
+                fixtures_dir = os.path.join(os.getcwd(), 'tests', 'fixtures')
+                os.makedirs(fixtures_dir, exist_ok=True)
+                fixtures_output_path = os.path.join(fixtures_dir, output_filename)
+                import shutil
+                shutil.copy2(merged_file_path, fixtures_output_path)
+                logger.info(f"Development mode: Saved copy of merged file to {fixtures_output_path}")
             
         finally:
             pptx_processor.close()

@@ -17,7 +17,7 @@ from src.config_manager import ConfigManager
 
 @click.command()
 @click.option('--host', default='0.0.0.0', help='Host to bind to')
-@click.option('--port', default=5000, type=int, help='Port to bind to')
+@click.option('--port', default=8080, type=int, help='Port to bind to')
 @click.option('--debug', is_flag=True, help='Enable debug mode')
 @click.option('--env', default='development', help='Environment (development, testing, production)')
 @click.option('--reload', is_flag=True, help='Enable auto-reload on file changes')
