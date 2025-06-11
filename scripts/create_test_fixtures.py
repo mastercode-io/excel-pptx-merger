@@ -156,7 +156,7 @@ def create_sample_powerpoint(output_path="tests/fixtures/sample_template.pptx"):
     subtitle = slide1.placeholders[1]
 
     title.text = "Trademark Search Report"
-    subtitle.text = "Client: {{client_name}}"
+    subtitle.text = "Client: {{order_form.client_info.client_name}}"
 
     # Slide 2: Client Information
     slide2 = prs.slides.add_slide(prs.slide_layouts[1])  # Title and content layout
@@ -164,12 +164,12 @@ def create_sample_powerpoint(output_path="tests/fixtures/sample_template.pptx"):
     content2 = slide2.placeholders[1]
 
     title2.text = "Client Information"
-    content2.text = """Client Name: {{client_name}}
-Search Type: {{search_type}}
-G&S Classes: {{g_s_classes}}
-SIC Code: {{sic_code}}
-Business Nature: {{business_nature}}
-Target Countries: {{target_countries}}"""
+    content2.text = """Client Name: {{order_form.client_info.client_name}}
+Search Type: {{order_form.client_info.search_type}}
+G&S Classes: {{order_form.client_info.g_s_classes}}
+SIC Code: {{order_form.client_info.sic}}
+Business Nature: {{order_form.client_info.nature_of_business}}
+Target Countries: {{order_form.client_info.designated_countries}}"""
 
     # Slide 3: Word Search Results
     slide3 = prs.slides.add_slide(prs.slide_layouts[1])
@@ -179,17 +179,17 @@ Target Countries: {{target_countries}}"""
     title3.text = "Word Search Results"
     content3.text = """Search performed for the following terms:
 
-Word: {{word_search.0.word}}
-Criteria: {{word_search.0.search_criteria}}
-Remarks: {{word_search.0.remarks}}
+Word: {{order_form.word_search.0.word}}
+Criteria: {{order_form.word_search.0.search_criteria}}
+Remarks: {{order_form.word_search.0.remarks}}
 
-Word: {{word_search.1.word}}
-Criteria: {{word_search.1.search_criteria}}
-Remarks: {{word_search.1.remarks}}
+Word: {{order_form.word_search.1.word}}
+Criteria: {{order_form.word_search.1.search_criteria}}
+Remarks: {{order_form.word_search.1.remarks}}
 
-Word: {{word_search.2.word}}
-Criteria: {{word_search.2.search_criteria}}
-Remarks: {{word_search.2.remarks}}"""
+Word: {{order_form.word_search.2.word}}
+Criteria: {{order_form.word_search.2.search_criteria}}
+Remarks: {{order_form.word_search.2.remarks}}"""
 
     # Slide 4: Image Search Results
     slide4 = prs.slides.add_slide(prs.slide_layouts[5])  # Blank layout
@@ -204,20 +204,20 @@ Remarks: {{word_search.2.remarks}}"""
     content_frame = content_box.text_frame
     content_frame.text = """Image Search Criteria:
 
-{{image_search.0.search_criteria}}
-Class: {{image_search.0.image_class_division_subdivision}}
+{{order_form.image_search.0.search_criteria}}
+Class: {{order_form.image_search.0.image_class_division_subdivision}}
 
-{{image_search.1.search_criteria}}
-Class: {{image_search.1.image_class_division_subdivision}}"""
+{{order_form.image_search.1.search_criteria}}
+Class: {{order_form.image_search.1.image_class_division_subdivision}}"""
 
     # Add image placeholders
     img1_placeholder = slide4.shapes.add_textbox(Inches(5.5), Inches(1.5), Inches(3), Inches(2))
     img1_frame = img1_placeholder.text_frame
-    img1_frame.text = "{{image_search.0.image}}"
+    img1_frame.text = "{{order_form.image_search.0.image}}"
 
     img2_placeholder = slide4.shapes.add_textbox(Inches(5.5), Inches(4), Inches(3), Inches(2))
     img2_frame = img2_placeholder.text_frame
-    img2_frame.text = "{{image_search.1.image}}"
+    img2_frame.text = "{{order_form.image_search.1.image}}"
 
     # Slide 5: Summary
     slide5 = prs.slides.add_slide(prs.slide_layouts[1])
@@ -225,11 +225,11 @@ Class: {{image_search.1.image_class_division_subdivision}}"""
     content5 = slide5.placeholders[1]
 
     title5.text = "Search Summary"
-    content5.text = """Search completed for {{client_name}}
+    content5.text = """Search completed for {{order_form.client_info.client_name}}
 
-Business Type: {{business_nature}}
-SIC Code: {{sic_code}}
-Target Markets: {{target_countries}}
+Business Type: {{order_form.client_info.nature_of_business}}
+SIC Code: {{order_form.client_info.sic}}
+Target Markets: {{order_form.client_info.designated_countries}}
 
 This report covers both word and image searches
 as requested for trademark clearance purposes."""

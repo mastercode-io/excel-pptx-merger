@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import traceback
+import datetime
 from typing import Any, Dict, Optional, Tuple, Union
 from flask import Flask, request, jsonify, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -213,6 +214,10 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             if extraction_config.get('global_settings', {}).get('image_extraction', {}).get('enabled', True):
                 images = excel_processor.extract_images(temp_dir)
             
+            # Save debug information in development mode
+            base_filename = os.path.splitext(excel_file.filename)[0]
+            save_debug_info(extracted_data, images, temp_dir, base_filename)
+            
         finally:
             excel_processor.close()
         
@@ -392,6 +397,59 @@ def get_stats() -> Tuple[Dict[str, Any], int]:
     
     except Exception as e:
         return create_error_response(e, 500)
+
+
+def save_debug_info(extracted_data, images, temp_dir, base_filename):
+    """Save debug information to files for development purposes."""
+    if not app_config.get('development_mode', False):
+        return
+    
+    # Create fixtures directory if it doesn't exist
+    fixtures_dir = os.path.join(os.getcwd(), 'tests', 'fixtures')
+    os.makedirs(fixtures_dir, exist_ok=True)
+    
+    # Create images directory if it doesn't exist
+    images_dir = os.path.join(fixtures_dir, 'images')
+    os.makedirs(images_dir, exist_ok=True)
+    
+    # Create a copy of the extracted data to modify with image references
+    debug_data = json.loads(json.dumps(extracted_data))
+    
+    # Copy images to fixtures/images and update references
+    if images:
+        image_refs = {}
+        for key, image_path in images.items():
+            if os.path.exists(image_path):
+                # Get image filename
+                image_filename = os.path.basename(image_path)
+                # Create destination path
+                dest_path = os.path.join(images_dir, image_filename)
+                # Copy image file
+                import shutil
+                shutil.copy2(image_path, dest_path)
+                # Store reference
+                image_refs[key] = os.path.relpath(dest_path, os.getcwd())
+        
+        # Add image references to debug data
+        debug_data['__debug_image_references'] = image_refs
+    
+    # Add metadata
+    debug_data['__debug_metadata'] = {
+        'timestamp': datetime.datetime.now().isoformat(),
+        'temp_directory': temp_dir,
+        'base_filename': base_filename
+    }
+    
+    # Save data to JSON file
+    debug_file_path = os.path.join(fixtures_dir, f"{base_filename}_debug_data.json")
+    with open(debug_file_path, 'w') as f:
+        json.dump(debug_data, f, indent=2)
+    
+    logger.info(f"Development mode: Saved debug data to {debug_file_path}")
+    if images:
+        logger.info(f"Development mode: Saved extracted images to {images_dir}")
+    
+    return debug_file_path
 
 
 # Google Cloud Function entry point

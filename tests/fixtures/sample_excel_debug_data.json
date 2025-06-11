@@ -1,0 +1,18 @@
+{
+  "order_form": {
+    "client_info": {
+      "client_name": "Acme Corporation Ltd",
+      "search_type": "Word",
+      "g_s_classes": "9, 35, 42",
+      "sic": "62012",
+      "nature_of_business": "Software Development & Consulting",
+      "designated_countries": "United Kingdom, United States"
+    },
+    "trademark_classes": {}
+  },
+  "__debug_metadata": {
+    "timestamp": "2025-06-11T16:27:35.344321",
+    "temp_directory": "/var/folders/h3/9_bx10sj2v157tdw7_p4fgx40000gn/T/excel_pptx_merger_zmm2quor",
+    "base_filename": "sample_excel"
+  }
+}

@@ -59,7 +59,12 @@ class ExcelProcessor:
                 
                 worksheet = self.workbook[sheet_name]
                 sheet_data = self._process_sheet(worksheet, config)
-                extracted_data[sheet_name] = sheet_data
+                
+                # Normalize sheet name for JSON compatibility
+                normalized_sheet_name = normalize_column_name(sheet_name)
+                logger.debug(f"Normalized sheet name: '{sheet_name}' -> '{normalized_sheet_name}'")
+                
+                extracted_data[normalized_sheet_name] = sheet_data
             
             return extracted_data
             
