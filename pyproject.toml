@@ -52,3 +52,8 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "--cov=src --cov-report=term-missing --cov-report=html"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.build]
