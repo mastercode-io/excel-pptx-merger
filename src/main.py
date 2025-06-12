@@ -5,6 +5,7 @@ import logging
 import os
 import traceback
 import datetime
+import copy
 from typing import Any, Dict, List, Optional, Tuple, Union
 from flask import Flask, request, jsonify, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -636,8 +637,8 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
     images_dir = os.path.join(fixtures_dir, 'images')
     os.makedirs(images_dir, exist_ok=True)
 
-    # Create a copy of the extracted data to modify with image references
-    debug_data = json.loads(json.dumps(extracted_data, default=str))
+    # Create a deep copy of the extracted data to ensure we don't modify the original
+    debug_data = copy.deepcopy(extracted_data)
 
     # Process enhanced image structure and copy images to fixtures
     if images:
@@ -697,7 +698,7 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
     if images:
         total_images = sum(len(sheet_images) for sheet_images in images.values())
         logger.info(f"Development mode: Saved {total_images} extracted images to {images_dir}")
-
+    
     return debug_file_path
 
 

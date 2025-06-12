@@ -235,17 +235,22 @@ class ExcelProcessor:
         try:
             # Extract headers
             headers = []
+            original_headers = []  # Store original headers for mapping
             for col_offset in range(max_columns):
                 col = header_col + col_offset
                 header_cell = worksheet.cell(row=headers_row, column=col)
 
                 if header_cell.value and not is_empty_cell_value(header_cell.value):
                     header = str(header_cell.value).strip()
+                    original_headers.append(header)
+                    
+                    # Apply column mapping if available
                     if header in column_mappings:
-                        header = column_mappings[header]
+                        mapped_header = column_mappings[header]
                     else:
-                        header = normalize_column_name(header)
-                    headers.append(header)
+                        mapped_header = normalize_column_name(header)
+                    
+                    headers.append(mapped_header)
                 else:
                     break  # Stop when we hit an empty header
 
@@ -260,7 +265,7 @@ class ExcelProcessor:
                 row_data = {}
                 has_data = False
 
-                for col_offset, header in enumerate(headers):
+                for col_offset, (header, original_header) in enumerate(zip(headers, original_headers)):
                     col = header_col + col_offset
                     cell = worksheet.cell(row=row, column=col)
                     value = cell.value
@@ -268,13 +273,16 @@ class ExcelProcessor:
                     if not is_empty_cell_value(value):
                         has_data = True
 
+                    # Use the mapped header name for the key
                     row_data[header] = value
 
                 if not has_data:
                     # Empty row found, stop extraction
                     break
 
-                data_rows.append(row_data)
+                # Only add non-empty rows with actual data (skip header row data)
+                if has_data and row > headers_row:
+                    data_rows.append(row_data)
 
             return data_rows
 
