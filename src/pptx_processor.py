@@ -349,7 +349,7 @@ class PowerPointProcessor:
         return None
 
     def _replace_shape_with_image(self, shape: BaseShape, image_path: str) -> None:
-        """Replace a text shape with an image."""
+        """Replace a text shape with an image while maintaining aspect ratio."""
         try:
             # Get the slide that contains this shape
             slide = None
@@ -381,11 +381,44 @@ class PowerPointProcessor:
             except Exception as e:
                 logger.warning(f"Error removing shape: {e}")
             
-            # Add the image at the same position
+            # Add the image at the same position, maintaining aspect ratio
             try:
-                logger.info(f"Adding image at position: left={left}, top={top}, width={width}, height={height}")
-                slide.shapes.add_picture(image_path, left, top, width, height)
-                logger.info(f"Successfully added image: {image_path}")
+                # Get original image dimensions to calculate aspect ratio
+                from PIL import Image
+                try:
+                    with Image.open(image_path) as img:
+                        img_width, img_height = img.size
+                        img_aspect_ratio = img_width / img_height
+                        
+                        # Calculate new dimensions to fit within the shape while maintaining aspect ratio
+                        shape_aspect_ratio = width / height
+                        
+                        if img_aspect_ratio > shape_aspect_ratio:
+                            # Image is wider than the shape (relative to height)
+                            # Use full width and adjust height
+                            new_width = width
+                            new_height = width / img_aspect_ratio
+                            # Center vertically
+                            new_top = top + (height - new_height) / 2
+                            new_left = left
+                        else:
+                            # Image is taller than the shape (relative to width)
+                            # Use full height and adjust width
+                            new_height = height
+                            new_width = height * img_aspect_ratio
+                            # Center horizontally
+                            new_left = left + (width - new_width) / 2
+                            new_top = top
+                        
+                        logger.info(f"Adding image with aspect ratio preserved: original={img_aspect_ratio}, " +
+                                   f"new dimensions: {new_width}x{new_height}")
+                        slide.shapes.add_picture(image_path, new_left, new_top, new_width, new_height)
+                        logger.info(f"Successfully added image: {image_path}")
+                except Exception as img_e:
+                    logger.warning(f"Could not determine image dimensions, using placeholder size: {img_e}")
+                    # Fall back to using the placeholder size if we can't get the image dimensions
+                    slide.shapes.add_picture(image_path, left, top, width, height)
+                    logger.info(f"Added image with placeholder dimensions: {image_path}")
             except Exception as e:
                 logger.error(f"Failed to add image: {e}")
                 # Try alternative method if the first one fails
