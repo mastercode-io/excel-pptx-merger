@@ -56,7 +56,7 @@
             "method": "contains_text",
             "text": "Image",
             "column": "A",
-            "search_range": "A10:A30"
+            "search_range": "A8:A30"
           },
           "data_extraction": {
             "orientation": "vertical",
@@ -81,6 +81,16 @@
       "delay_seconds": 300,
       "keep_on_error": true,
       "development_mode": false
+    },
+    "image_storage": {
+      "development_mode": {
+        "directory": "tests/fixtures/images",
+        "cleanup_after_merge": false
+      },
+      "production_mode": {
+        "directory": "temp",
+        "cleanup_after_merge": true
+      }
     },
     "image_extraction": {
       "enabled": true,

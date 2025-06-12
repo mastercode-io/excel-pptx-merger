@@ -25,13 +25,23 @@
         "remarks": "Service description"
       }
     ],
-    "image_search": {}
+    "image_search": [
+      {
+        "image": "/Users/alexsherin/Projects_/excel-pptx-merger/tests/fixtures/images/order_form_image_1.png",
+        "search_criteria": "Logo/Brand search",
+        "image_classification": "26.01.01"
+      },
+      {
+        "image": "/Users/alexsherin/Projects_/excel-pptx-merger/tests/fixtures/images/order_form_image_2.png",
+        "search_criteria": "Symbol search",
+        "image_classification": "26.01.03"
+      }
+    ]
   },
   "__debug_image_references": {
     "Order Form": [
       {
-        "original_path": "/var/folders/h3/9_bx10sj2v157tdw7_p4fgx40000gn/T/excel_pptx_merger__qay11qa/order_form_image_1.png",
-        "debug_path": "tests/fixtures/images/order_form_image_1.png",
+        "path": "/Users/alexsherin/Projects_/excel-pptx-merger/tests/fixtures/images/order_form_image_1.png",
         "filename": "order_form_image_1.png",
         "index": 1,
         "sheet": "Order Form",
@@ -58,8 +68,7 @@
         "format": "png"
       },
       {
-        "original_path": "/var/folders/h3/9_bx10sj2v157tdw7_p4fgx40000gn/T/excel_pptx_merger__qay11qa/order_form_image_2.png",
-        "debug_path": "tests/fixtures/images/order_form_image_2.png",
+        "path": "/Users/alexsherin/Projects_/excel-pptx-merger/tests/fixtures/images/order_form_image_2.png",
         "filename": "order_form_image_2.png",
         "index": 2,
         "sheet": "Order Form",
@@ -155,13 +164,14 @@
     }
   },
   "__debug_metadata": {
-    "timestamp": "2025-06-12T11:42:11.237003",
-    "temp_directory": "/var/folders/h3/9_bx10sj2v157tdw7_p4fgx40000gn/T/excel_pptx_merger__qay11qa",
+    "timestamp": "2025-06-12T12:54:41.782725",
+    "temp_directory": "/var/folders/h3/9_bx10sj2v157tdw7_p4fgx40000gn/T/excel_pptx_merger_b5ofv0ic",
     "base_filename": "sample_excel",
     "enhanced_features": {
       "image_position_extraction": true,
       "position_based_matching": true,
-      "format_detection": true
+      "format_detection": true,
+      "simplified_image_paths": true
     }
   }
 }

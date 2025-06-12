@@ -289,13 +289,41 @@ class ExcelProcessor:
         except Exception as e:
             raise ExcelProcessingError(f"Failed to extract table data: {e}")
 
-    def extract_images(self, output_directory: str) -> Dict[str, List[Dict[str, Any]]]:
-        """Extract images from Excel file with enhanced position information."""
+    def extract_images(self, config: Dict[str, Any] = None) -> Dict[str, List[Dict[str, Any]]]:
+        """Extract images from Excel file with enhanced position information.
+        
+        Args:
+            config: Configuration dictionary with image storage settings
+            
+        Returns:
+            Dictionary of extracted images by sheet name
+        """
         if not self.workbook:
             self._validate_file()
-
+            
+        # Get app configuration to determine environment
+        from .config_manager import ConfigManager
+        config_manager = ConfigManager()
+        app_config = config_manager.get_app_config()
+        development_mode = app_config.get('development_mode', False)
+        
+        # Determine output directory based on environment
+        if config is None:
+            config = {}
+            
+        if development_mode:
+            output_directory = config.get('image_storage', {}).get('development_mode', {}).get('directory', 'tests/fixtures/images')
+        else:
+            output_directory = config.get('image_storage', {}).get('production_mode', {}).get('directory', 'temp')
+        
+        # Convert relative path to absolute if needed
+        if not os.path.isabs(output_directory):
+            output_directory = os.path.join(os.getcwd(), output_directory)
+            
         # Ensure output directory exists
         os.makedirs(output_directory, exist_ok=True)
+        
+        logger.info(f"Extracting images to: {output_directory}")
 
         images = {}
 
@@ -327,7 +355,7 @@ class ExcelProcessor:
                             with open(filepath, 'wb') as f:
                                 f.write(image_data)
 
-                            # Create enhanced image info
+                            # Create simplified image info with single path
                             image_info = {
                                 'path': filepath,
                                 'filename': filename,
@@ -574,7 +602,118 @@ class ExcelProcessor:
                         summary['position_summary']['without_position'] += 1
 
         return summary
-    
+
+    def link_images_to_table(self, extracted_data: Dict[str, Any], images: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        """Link extracted images to their corresponding rows in the image search table.
+        
+        This method maps images to the image search table rows based on their position
+        in the Excel sheet, replacing the image cell value with the path to the extracted image.
+        
+        Args:
+            extracted_data: The data extracted from Excel sheets
+            images: Dictionary of extracted images with position information
+            
+        Returns:
+            Updated extracted data with image paths linked to table rows
+        """
+        if not images:
+            return extracted_data
+        
+        # Create a deep copy to avoid modifying the original data
+        import copy
+        result = copy.deepcopy(extracted_data)
+        
+        # Process each sheet
+        for sheet_name, sheet_data in result.items():
+            # Get the original sheet name (before normalization)
+            original_sheet_names = [name for name in images.keys() 
+                                if normalize_column_name(name) == sheet_name]
+            
+            if not original_sheet_names:
+                logger.debug(f"No matching original sheet name found for normalized name '{sheet_name}'")
+                continue
+                
+            original_sheet_name = original_sheet_names[0]
+            sheet_images = images.get(original_sheet_name, [])
+            
+            logger.debug(f"Found original sheet name '{original_sheet_name}' for normalized name '{sheet_name}'")
+            
+            if not sheet_images:
+                logger.debug(f"No images found for sheet '{original_sheet_name}'")
+                continue
+            
+            # Check for image_search table
+            if 'image_search' in sheet_data and isinstance(sheet_data['image_search'], list):
+                image_search_table = sheet_data['image_search']
+                
+                # Map row numbers to images based on position
+                row_to_image = {}
+                for img in sheet_images:
+                    if 'position' in img and 'coordinates' in img['position']:
+                        row_num = img['position']['coordinates']['from']['row']
+                        # Use the single path
+                        image_path = img['path']
+                        
+                        # Verify the path exists
+                        if os.path.exists(image_path):
+                            row_to_image[row_num] = image_path
+                            logger.debug(f"Mapped image at row {row_num} to path {image_path}")
+                        else:
+                            logger.warning(f"Image path does not exist: {image_path}")
+                
+                # Sort images by row number
+                sorted_rows = sorted(row_to_image.keys())
+                
+                # Link images to table rows
+                for i, row_data in enumerate(image_search_table):
+                    if i < len(sorted_rows):
+                        row_data['image'] = row_to_image[sorted_rows[i]]
+                        logger.debug(f"Linked image at Excel row {sorted_rows[i]} to table row {i}")
+        
+        return result
+
+    def cleanup_images(self, images: Dict[str, List[Dict[str, Any]]], config: Dict[str, Any] = None) -> None:
+        """Clean up extracted images based on configuration.
+        
+        Args:
+            images: Dictionary of extracted images by sheet name
+            config: Configuration dictionary with image storage settings
+        """
+        if not images:
+            return
+            
+        # Get app configuration to determine environment
+        from .config_manager import ConfigManager
+        config_manager = ConfigManager()
+        app_config = config_manager.get_app_config()
+        development_mode = app_config.get('development_mode', False)
+        
+        # Determine if we should clean up images
+        if config is None:
+            config = {}
+            
+        cleanup = False
+        if development_mode:
+            cleanup = config.get('image_storage', {}).get('development_mode', {}).get('cleanup_after_merge', False)
+        else:
+            cleanup = config.get('image_storage', {}).get('production_mode', {}).get('cleanup_after_merge', True)
+        
+        if not cleanup:
+            logger.debug("Image cleanup skipped based on configuration")
+            return
+            
+        # Delete image files
+        for sheet_name, sheet_images in images.items():
+            for img in sheet_images:
+                try:
+                    if 'path' in img and os.path.exists(img['path']):
+                        os.remove(img['path'])
+                        logger.debug(f"Deleted image: {img['path']}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete image {img.get('path', 'unknown')}: {e}")
+                    
+        logger.info("Image cleanup completed")
+
     def close(self) -> None:
         """Close the workbook and free resources."""
         if self.workbook:

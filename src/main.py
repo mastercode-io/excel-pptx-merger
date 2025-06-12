@@ -218,10 +218,14 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             # Extract images with enhanced position information
             images = None
             if extraction_config.get('global_settings', {}).get('image_extraction', {}).get('enabled', True):
-                images = excel_processor.extract_images(temp_dir)
+                # Pass the global settings to extract_images
+                images = excel_processor.extract_images(extraction_config.get('global_settings', {}))
 
-                # Log image extraction summary
+                # Link images to the image search table
                 if images:
+                    extracted_data = excel_processor.link_images_to_table(extracted_data, images)
+                    
+                    # Log image extraction summary
                     image_summary = excel_processor.get_image_summary(images)
                     logger.info(f"Image extraction summary: {image_summary}")
 
@@ -251,16 +255,20 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 shutil.copy2(merged_file_path, fixtures_output_path)
                 logger.info(f"Development mode: Saved copy of merged file to {fixtures_output_path}")
 
+            # Clean up images after successful merge if configured
+            if images:
+                excel_processor.cleanup_images(images, extraction_config.get('global_settings', {}))
+
+            # Return the merged file
+            return send_file(
+                merged_file_path,
+                as_attachment=True,
+                download_name=output_filename,
+                mimetype='application/vnd.openxmlformats-officedocument.presentationml.presentation'
+            )
+
         finally:
             pptx_processor.close()
-
-        # Return the merged file
-        return send_file(
-            merged_file_path,
-            as_attachment=True,
-            download_name=output_filename,
-            mimetype='application/vnd.openxmlformats-officedocument.presentationml.presentation'
-        )
 
     except ValidationError as e:
         if temp_manager and temp_dir:
@@ -640,7 +648,7 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
     # Create a deep copy of the extracted data to ensure we don't modify the original
     debug_data = copy.deepcopy(extracted_data)
 
-    # Process enhanced image structure and copy images to fixtures
+    # Process image structure for debug data
     if images:
         image_refs = {}
         for sheet_name, sheet_images in images.items():
@@ -649,16 +657,14 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
                 if os.path.exists(image_info['path']):
                     # Get image filename
                     image_filename = os.path.basename(image_info['path'])
-                    # Create destination path
-                    dest_path = os.path.join(images_dir, image_filename)
-                    # Copy image file
-                    import shutil
-                    shutil.copy2(image_info['path'], dest_path)
-
-                    # Create enhanced image reference for debug
+                    
+                    # Create reference to the image path
+                    # No need to copy the image as it's already in the right location
+                    # if we're using the development mode directory
+                    
+                    # Create simplified image reference for debug
                     image_ref = {
-                        'original_path': image_info['path'],
-                        'debug_path': os.path.relpath(dest_path, os.getcwd()),
+                        'path': image_info['path'],
                         'filename': image_info['filename'],
                         'index': image_info['index'],
                         'sheet': image_info['sheet'],
@@ -671,7 +677,7 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
             if sheet_image_refs:
                 image_refs[sheet_name] = sheet_image_refs
 
-        # Add enhanced image references to debug data
+        # Add image references to debug data
         debug_data['__debug_image_references'] = image_refs
 
         # Add image extraction summary
@@ -685,10 +691,11 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
         'enhanced_features': {
             'image_position_extraction': True,
             'position_based_matching': True,
-            'format_detection': True
+            'format_detection': True,
+            'simplified_image_paths': True
         }
     }
-
+    
     # Save data to JSON file
     debug_file_path = os.path.join(fixtures_dir, f"{base_filename}_debug_data.json")
     with open(debug_file_path, 'w') as f:
@@ -790,21 +797,14 @@ def merge(excel_file: str, pptx_file: str, output_file: str, config: Optional[st
                 )
 
                 # Extract images with enhanced position information
-                images = excel_processor.extract_images(temp_dir)
-
-                if images and debug_images:
-                    # Print detailed image information
+                images = None
+                if extraction_config.get('global_settings', {}).get('image_extraction', {}).get('enabled', True):
+                    images = excel_processor.extract_images(temp_dir)
+                    
+                    # Log image extraction summary
                     image_summary = excel_processor.get_image_summary(images)
-                    click.echo("=== Image Extraction Summary ===")
-                    click.echo(json.dumps(image_summary, indent=2))
+                    logger.info(f"Image extraction summary: {image_summary}")
 
-                    for sheet_name, sheet_images in images.items():
-                        click.echo(f"\n=== Images from sheet: {sheet_name} ===")
-                        for img_info in sheet_images:
-                            click.echo(f"  - {img_info['filename']}")
-                            click.echo(f"    Position: {img_info['position']['estimated_cell']}")
-                            click.echo(f"    Size: {img_info['size']}")
-                            click.echo(f"    Format: {img_info['format']}")
             finally:
                 excel_processor.close()
 
