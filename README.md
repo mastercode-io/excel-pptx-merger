@@ -7,7 +7,8 @@ A robust Python service that extracts data from Excel files and merges it into P
 - **Dynamic Excel Data Extraction**: Flexible table detection with configurable search criteria
 - **PowerPoint Template Processing**: Jinja-style merge field replacement (`{{field_name}}`)
 - **Multiple Data Orientations**: Support for horizontal (key-value) and vertical (table) data layouts
-- **Image Handling**: Extract images from Excel and replace image placeholders in PowerPoint
+- **Image Handling**: Extract images from Excel and replace image placeholders in PowerPoint with aspect ratio preservation
+- **Explicit Field Type Support**: Configure field types (text, image, number, date, boolean) for precise data handling
 - **Environment-Based Configuration**: Development, testing, and production configurations
 - **Temporary File Management**: Intelligent cleanup with configurable retention policies
 - **API Endpoints**: RESTful API with health checks, preview, and processing endpoints
@@ -94,351 +95,208 @@ The service uses JSON configuration to define how data should be extracted from 
             "data_row_offset": 1,
             "max_columns": 6,
             "column_mappings": {
-              "Client": "client_name",
-              "Word Or Image": "search_type"
+              "Client": {
+                "name": "client_name",
+                "type": "text"
+              },
+              "Word Or Image": {
+                "name": "search_type",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "word_search",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Word",
+            "column": "A",
+            "search_range": "A1:A50"
+          },
+          "data_extraction": {
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_rows": 10,
+            "column_mappings": {
+              "Word": {
+                "name": "word",
+                "type": "text"
+              },
+              "Search Criteria": {
+                "name": "search_criteria",
+                "type": "text"
+              }
             }
           }
         }
       ]
     }
-  },
-  "global_settings": {
-    "normalize_keys": true,
-    "temp_file_cleanup": {
-      "enabled": true,
-      "delay_seconds": 300,
-      "keep_on_error": true,
-      "development_mode": false
-    }
   }
 }
 ```
 
-### Environment Variables
+## 📘 User Manual
 
-```bash
-# Application
-ENVIRONMENT=development
-DEVELOPMENT_MODE=true
-LOG_LEVEL=DEBUG
+### PowerPoint Template Design
 
-# API
-API_KEY=your_api_key_here
-MAX_FILE_SIZE_MB=50
-ALLOWED_EXTENSIONS=xlsx,pptx
+#### Merge Field Syntax
 
-# Temporary Files
-CLEANUP_TEMP_FILES=false
-TEMP_FILE_RETENTION_SECONDS=3600
+Merge fields in PowerPoint templates use the Jinja-style double curly braces syntax:
 
-# Google Cloud (for deployment)
-GOOGLE_CLOUD_PROJECT=your_project_id
-GOOGLE_CLOUD_BUCKET=your_bucket_name
+```
+{{field_name}}
 ```
 
-## 📊 API Reference
+For nested data or arrays, use dot notation:
 
-### POST /api/v1/merge
-
-Merge Excel data into PowerPoint template.
-
-**Request:**
-- `excel_file`: Excel file (.xlsx)
-- `pptx_file`: PowerPoint template (.pptx)
-- `config`: JSON configuration (optional)
-
-**Response:** Merged PowerPoint file
-
-```bash
-curl -X POST http://localhost:5000/api/v1/merge \
-  -F "excel_file=@data.xlsx" \
-  -F "pptx_file=@template.pptx" \
-  -F "config=@config.json" \
-  -o merged_output.pptx
+```
+{{table_name.0.field_name}}
 ```
 
-### POST /api/v1/preview
+#### Image Placeholders
 
-Preview merge without processing files.
+To create an image placeholder:
 
-**Response:**
+1. Create a text box in PowerPoint
+2. Add a merge field with the name of an image field: `{{image_field_name}}`
+3. Format the text box to the desired size and position
+4. The image will be inserted maintaining its original aspect ratio and centered within the placeholder
+
+#### Best Practices
+
+- **Sizing**: Make image placeholders slightly larger than needed to accommodate various image sizes
+- **Text Alternatives**: Consider adding conditional text for cases where images might be missing
+- **Field Naming**: Use descriptive field names that match your Excel data structure
+- **Testing**: Test templates with sample data to ensure proper field replacement
+
+### Excel Requirements
+
+#### Data Structure
+
+The Excel processor supports two main data structures:
+
+1. **Key-Value Pairs**: For client info and other metadata (horizontal or vertical orientation)
+2. **Tables**: For lists of items with multiple columns
+
+#### Image Handling
+
+To include images in your Excel data:
+
+1. Insert images into Excel cells
+2. Configure the corresponding fields as `"type": "image"` in the configuration
+3. The processor will extract these images and make them available for PowerPoint insertion
+
+#### Best Practices
+
+- **Sheet Names**: Use consistent sheet names that match your configuration
+- **Headers**: Include clear headers that match your configuration's search criteria
+- **Data Formatting**: Keep data consistent with expected types (text, numbers, dates)
+- **Images**: Insert images properly into cells rather than floating them
+
+### Configuration Format
+
+#### Field Type Support
+
+The configuration now supports explicit field type information:
+
 ```json
-{
-  "success": true,
-  "preview": {
-    "extracted_data": {...},
-    "template_info": {...},
-    "merge_preview": {...},
-    "configuration_used": {...}
+"column_mappings": {
+  "Header Name": {
+    "name": "field_name",
+    "type": "text|image|number|date|boolean"
   }
 }
 ```
 
-### GET /api/v1/health
+Supported field types:
+- **text**: Text content (default)
+- **image**: Image content (path, URL, or binary data)
+- **number**: Numeric values
+- **date**: Date values
+- **boolean**: Boolean values
 
-Health check endpoint.
+#### Configuration Sections
 
-**Response:**
-```json
-{
-  "success": true,
-  "status": "healthy",
-  "version": "0.1.0",
-  "timestamp": "2023-12-01T12:00:00Z",
-  "services": {
-    "config_manager": true,
-    "temp_file_manager": true
-  }
-}
-```
+1. **sheet_configs**: Defines which Excel sheets to process
+2. **subtables**: Defines tables or key-value sections within each sheet
+3. **header_search**: Defines how to locate the start of each data section
+4. **data_extraction**: Defines how to extract and map data from the section
 
-### GET /api/v1/config
+#### Example Configurations
 
-Get default configuration.
+See the `config/default_config.json` file for comprehensive examples of:
+- Key-value pair extraction
+- Table data extraction
+- Image field configuration
+- Search criteria options
 
-### GET /api/v1/stats
+## 🔄 Processing Flow
 
-Get system statistics.
+1. **Excel Processing**:
+   - Locate sheets based on configuration
+   - Find headers using search criteria
+   - Extract data according to extraction rules
+   - Apply column mappings and field type information
+   - Extract embedded images
 
-## 🎯 Usage Examples
-
-### Basic CLI Usage
-
-```bash
-# Merge files using CLI
-uv run python -m src.main merge \
-  input.xlsx \
-  template.pptx \
-  output.pptx \
-  --config config.json
-```
-
-### PowerPoint Template Setup
-
-Create merge fields in your PowerPoint template using double curly braces:
-
-```
-Client: {{Order Form.client_info.client_name}}
-Type: {{Order Form.client_info.search_type}}
-Date: {{Order Form.client_info.order_date}}
-
-Classes:
-{{Order Form.trademark_classes.0.class_number}} - {{Order Form.trademark_classes.0.class_description}}
-{{Order Form.trademark_classes.1.class_number}} - {{Order Form.trademark_classes.1.class_description}}
-```
-
-### Excel Data Structure
-
-Organize your Excel data with clear headers and consistent layouts:
-
-```
-Client          Type      Date
-Acme Corp       Word      2023-12-01
-
-Class    Description           Status
-35       Advertising services  Active
-42       Computer services     Pending
-```
+2. **PowerPoint Processing**:
+   - Load template presentation
+   - Find merge fields in text shapes
+   - Replace text fields with corresponding data
+   - Replace image placeholders with actual images (maintaining aspect ratio)
+   - Save the resulting presentation
 
 ## 🧪 Testing
 
 ```bash
 # Run all tests
-uv run pytest
-
-# Run with coverage
-uv run pytest --cov=src --cov-report=html
+python -m pytest
 
 # Run specific test file
-uv run pytest tests/test_excel_processor.py -v
+python -m pytest tests/test_excel_processor.py
 
-# Run integration tests only
-uv run pytest tests/integration/ -v
+# Run with coverage
+python -m pytest --cov=src
 ```
 
 ## 🚀 Deployment
 
-### Google Cloud Functions
+### Google Cloud Function
 
 ```bash
-# Set environment variables
-export GOOGLE_CLOUD_PROJECT=your-project-id
-export API_KEY=your-secure-api-key
-
 # Deploy to Google Cloud
-python scripts/deploy_gcp.py \
-  --project-id your-project-id \
-  --region us-central1 \
-  --function-name excel-pptx-merger \
-  --env production
+python scripts/deploy_gcp.py --project your-project-id
 ```
 
 ### Docker Deployment
 
 ```bash
-# Build and run with Docker
-docker-compose -f docker/docker-compose.yml up --build
+# Build Docker image
+docker build -f docker/Dockerfile -t excel-pptx-merger:latest .
 
-# Production deployment
-docker build -f docker/Dockerfile -t excel-pptx-merger .
-docker run -p 8080:8080 \
-  -e ENVIRONMENT=production \
-  -e API_KEY=your-api-key \
-  excel-pptx-merger
+# Run Docker container
+docker run -p 5000:5000 excel-pptx-merger:latest
 ```
 
-## 🏗️ Project Structure
+## 📚 Additional Resources
 
-```
-excel-pptx-merger/
-├── src/                          # Source code
-│   ├── main.py                   # Main API handler & CLI
-│   ├── excel_processor.py        # Excel data extraction
-│   ├── pptx_processor.py         # PowerPoint processing
-│   ├── config_manager.py         # Configuration management
-│   ├── temp_file_manager.py      # Temporary file handling
-│   └── utils/                    # Utility modules
-│       ├── exceptions.py         # Custom exceptions
-│       ├── file_utils.py         # File handling utilities
-│       └── validation.py         # Input validation
-├── tests/                        # Test suite
-│   ├── fixtures/                 # Test data and configurations
-│   ├── integration/              # Integration tests
-│   ├── test_excel_processor.py   # Excel processor tests
-│   └── test_config_manager.py    # Configuration tests
-├── config/                       # Configuration files
-│   ├── default_config.json       # Default extraction config
-│   ├── development.env           # Development environment
-│   ├── testing.env              # Testing environment
-│   └── production.env           # Production environment
-├── scripts/                      # Deployment and utility scripts
-│   ├── setup_dev.py             # Development setup
-│   ├── run_local_server.py      # Local server runner
-│   └── deploy_gcp.py            # Google Cloud deployment
-├── docker/                       # Docker configuration
-│   ├── Dockerfile               # Docker image definition
-│   └── docker-compose.yml       # Local development stack
-├── docs/                         # Documentation
-│   └── excel_pptx_merger_prd.md # Product Requirements Document
-├── pyproject.toml               # Project configuration
-├── requirements.txt             # Dependencies for GCP
-└── README.md                    # This file
-```
-
-## 🔧 Development
-
-### Code Quality
-
-```bash
-# Format code
-uv run black src/ tests/
-
-# Check style
-uv run flake8 src/ tests/
-
-# Type checking
-uv run mypy src/
-
-# Run all quality checks
-pre-commit run --all-files
-```
-
-### Adding New Features
-
-1. **Excel Processing**: Extend `ExcelProcessor` class in `src/excel_processor.py`
-2. **PowerPoint Processing**: Extend `PowerPointProcessor` class in `src/pptx_processor.py`
-3. **API Endpoints**: Add new routes in `src/main.py`
-4. **Configuration**: Update schema in `src/utils/validation.py`
-5. **Tests**: Add tests in appropriate `tests/` subdirectory
-
-### Configuration Schema
-
-The configuration system supports:
-
-- **Multiple sheets** with different extraction rules
-- **Flexible header search** (contains_text, exact_match, regex)
-- **Data orientation** (horizontal key-value pairs, vertical tables)
-- **Column mapping** for consistent output keys
-- **Image extraction** and replacement
-- **Environment-specific overrides**
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Run tests and quality checks
-4. Commit changes (`git commit -m 'Add amazing feature'`)
-5. Push to branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
-
-## 📚 Documentation
-
-- **Product Requirements**: [docs/excel_pptx_merger_prd.md](docs/excel_pptx_merger_prd.md)
 - **API Documentation**: Available at `/api/v1/` endpoints when server is running
 - **Configuration Guide**: See `config/default_config.json` for examples
 - **Deployment Guide**: See `scripts/deploy_gcp.py` for Google Cloud deployment
 
 ## ⚠️ Security Considerations
 
-- **API Key Authentication**: Set `API_KEY` environment variable for production
-- **File Size Limits**: Configure `MAX_FILE_SIZE_MB` to prevent abuse
-- **Temporary File Cleanup**: Ensure `CLEANUP_TEMP_FILES=true` in production
-- **Input Validation**: All inputs are validated before processing
-- **Error Handling**: Sensitive information is not exposed in error messages
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Excel file not found**: Verify file path and permissions
-```bash
-ls -la path/to/file.xlsx
-```
-
-**PowerPoint template invalid**: Check template format and merge field syntax
-```bash
-# Test with minimal template containing {{test}} field
-```
-
-**Memory issues with large files**: Increase container memory or implement streaming
-```yaml
-# docker-compose.yml
-deploy:
-  resources:
-    limits:
-      memory: 2G
-```
-
-**Google Cloud deployment fails**: Check authentication and project settings
-```bash
-gcloud auth list
-gcloud config get-value project
-```
-
-### Debug Mode
-
-Enable debug mode for detailed logging:
-
-```bash
-export DEVELOPMENT_MODE=true
-export LOG_LEVEL=DEBUG
-python scripts/run_local_server.py --debug
-```
+- Validate all input files before processing
+- Use proper authentication for API endpoints
+- Sanitize file paths to prevent directory traversal
+- Consider encryption for sensitive data
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🙏 Acknowledgments
+## 👥 Contributing
 
-- **OpenPyXL**: Excel file processing
-- **python-pptx**: PowerPoint file manipulation
-- **Flask**: Web framework
-- **Google Cloud Functions**: Serverless deployment platform
-- **uv**: Fast Python package manager
-
----
-
-**Made with ❤️ for Trademark Helpline**
-
-For support, please contact the development team or create an issue in the repository.
+Contributions are welcome! Please feel free to submit a Pull Request.
