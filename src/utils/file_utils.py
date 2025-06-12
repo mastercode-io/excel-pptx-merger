@@ -43,13 +43,20 @@ def validate_file_size(file_obj: Union[BinaryIO, FileStorage], max_size_mb: int)
 
 
 def create_temp_directory(prefix: str = "excel_pptx_merger_") -> str:
-    """Create a temporary directory for processing files."""
-    try:
-        temp_dir = tempfile.mkdtemp(prefix=prefix)
-        logger.debug(f"Created temporary directory: {temp_dir}")
-        return temp_dir
-    except Exception as e:
-        raise FileProcessingError(f"Failed to create temporary directory: {e}")
+    """Create a temporary directory with the given prefix.
+    
+    This function is maintained for backward compatibility.
+    New code should use the storage abstraction layer instead.
+    
+    Args:
+        prefix: Prefix for the temporary directory name
+        
+    Returns:
+        Path to the created temporary directory
+    """
+    temp_dir = tempfile.mkdtemp(prefix=prefix)
+    logger.debug(f"Created temporary directory: {temp_dir}")
+    return temp_dir
 
 
 def save_uploaded_file(
@@ -100,18 +107,25 @@ def save_uploaded_file(
 
 
 def cleanup_directory(directory_path: str, force: bool = False) -> None:
-    """Clean up directory and all its contents."""
+    """Clean up a directory and all its contents.
+    
+    This function is maintained for backward compatibility.
+    New code should use the storage abstraction layer instead.
+    
+    Args:
+        directory_path: Path to the directory to clean up
+        force: If True, ignore errors during cleanup
+    """
     try:
         if os.path.exists(directory_path):
-            shutil.rmtree(directory_path)
+            shutil.rmtree(directory_path, ignore_errors=force)
             logger.debug(f"Cleaned up directory: {directory_path}")
         else:
             logger.debug(f"Directory does not exist, skipping cleanup: {directory_path}")
     except Exception as e:
-        if force:
-            logger.error(f"Failed to cleanup directory {directory_path}: {e}")
-        else:
-            raise FileProcessingError(f"Failed to cleanup directory {directory_path}: {e}")
+        if not force:
+            raise
+        logger.warning(f"Error during directory cleanup (ignored): {e}")
 
 
 def get_file_info(file_path: str) -> dict:

@@ -206,6 +206,8 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         )
 
         logger.info(f"Processing files: {excel_file.filename} + {pptx_file.filename}")
+        logger.debug(f"Excel file path: {excel_path}")
+        logger.debug(f"PowerPoint file path: {pptx_path}")
 
         # Process Excel file
         excel_processor = ExcelProcessor(excel_path)
@@ -241,7 +243,11 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         try:
             # Generate output filename
             output_filename = f"merged_{pptx_file.filename}"
-            output_path = os.path.join(temp_dir, output_filename)
+            relative_output_path = os.path.join(temp_dir, output_filename)
+            
+            # Use storage backend to get the full path
+            output_path = temp_manager.storage._get_full_path(relative_output_path)
+            logger.debug(f"Output file path: {output_path}")
 
             # Merge data into template with enhanced image support
             merged_file_path = pptx_processor.merge_data(extracted_data, output_path, images)
@@ -712,34 +718,56 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
 # Google Cloud Function entry point
 @functions_framework.http
 def excel_pptx_merger(request):
-    """Google Cloud Function entry point."""
-    with app.request_context(request.environ):
+    """Google Cloud Function entry point with enhanced image storage support.
+    
+    This function handles HTTP requests to the Cloud Function, supporting both
+    local filesystem and Google Cloud Storage for temporary file storage.
+    
+    Args:
+        request: Flask request object from Cloud Functions
+        
+    Returns:
+        Flask response with the merged PowerPoint file or error information
+    """
+    # Setup logging for Cloud Functions environment
+    setup_logging()
+    
+    # Check if this is a health check request
+    if request.path == '/health' or request.path == '/api/v1/health':
+        return health()[0]
+    
+    # Check authentication
+    if not authenticate_request():
+        error_response, status_code = create_error_response(
+            AuthenticationError("Invalid API key"), 401
+        )
+        return error_response, status_code
+    
+    # Handle merge request
+    if request.method == 'POST':
         try:
-            # Route the request based on path
-            path = request.path.rstrip('/')
-            method = request.method
-
-            if path == '/api/v1/health' and method == 'GET':
-                response_data, status_code = health()
-            elif path == '/api/v1/merge' and method == 'POST':
-                return merge_files()  # This returns a file response
-            elif path == '/api/v1/preview' and method == 'POST':
-                response_data, status_code = preview_merge()
-            elif path == '/api/v1/config' and method in ['GET', 'POST']:
-                response_data, status_code = manage_config()
-            elif path == '/api/v1/stats' and method == 'GET':
-                response_data, status_code = get_stats()
-            else:
-                response_data, status_code = create_error_response(
-                    APIError(f"Endpoint not found: {method} {path}"), 404
-                )
-
-            return jsonify(response_data), status_code
-
+            # Extract files from request
+            if not request.files:
+                # Cloud Functions might receive files differently
+                return jsonify(create_error_response(
+                    ValidationError("No files were uploaded"), 400
+                )[0]), 400
+                
+            if 'excel_file' not in request.files or 'pptx_file' not in request.files:
+                return jsonify(create_error_response(
+                    ValidationError("Both 'excel_file' and 'pptx_file' are required"), 400
+                )[0]), 400
+            
+            # Process the merge request using the Flask app's merge_files function
+            return merge_files()
+            
         except Exception as e:
-            response_data, status_code = create_error_response(e, 500)
-            return jsonify(response_data), status_code
-
+            logger.exception("Error processing Cloud Function request")
+            return jsonify(create_error_response(e, 500)[0]), 500
+    else:
+        return jsonify(create_error_response(
+            ValidationError("Only POST method is supported"), 405
+        )[0]), 405
 
 # CLI interface
 @click.group()

@@ -1,4 +1,4 @@
-"""Temporary file management with environment-based cleanup control."""
+"""Temporary file management with environment-based cleanup control and cloud storage support."""
 
 import os
 import shutil
@@ -6,19 +6,21 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union, BinaryIO
 import logging
 import atexit
 from datetime import datetime, timedelta
+import uuid
 
 from .utils.exceptions import TempFileError
 from .utils.file_utils import create_temp_directory, cleanup_directory
+from .utils.storage import StorageFactory, StorageBackend
 
 logger = logging.getLogger(__name__)
 
 
 class TempFileManager:
-    """Manages temporary files and directories with configurable cleanup policies."""
+    """Manages temporary files and directories with configurable cleanup policies and storage backends."""
     
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         """Initialize temporary file manager with configuration."""
@@ -36,8 +38,13 @@ class TempFileManager:
         self.keep_on_error = self._get_config_bool('keep_on_error', True)
         self.development_mode = self._get_config_bool('development_mode', False)
         
+        # Initialize storage backend
+        self.storage = StorageFactory.get_storage_backend()
+        storage_type = os.getenv('STORAGE_BACKEND', 'LOCAL').upper()
+        
         logger.debug(f"TempFileManager initialized: enabled={self.enabled}, "
-                    f"delay={self.delay_seconds}s, dev_mode={self.development_mode}")
+                    f"delay={self.delay_seconds}s, dev_mode={self.development_mode}, "
+                    f"storage_backend={storage_type}")
     
     def _get_config_bool(self, key: str, default: bool) -> bool:
         """Get boolean configuration value with environment override."""
@@ -69,7 +76,12 @@ class TempFileManager:
                             keep_on_error: Optional[bool] = None) -> str:
         """Create a temporary directory with configured cleanup policy."""
         try:
-            temp_dir = create_temp_directory(prefix)
+            # Generate a unique directory path
+            dir_id = str(uuid.uuid4())
+            temp_dir = f"{prefix}{dir_id}"
+            
+            # Create the directory in the storage backend
+            storage_path = self.storage.create_directory(temp_dir)
             
             # Store directory info for cleanup
             with self._lock:
@@ -79,7 +91,8 @@ class TempFileManager:
                     'keep_on_error': keep_on_error if keep_on_error is not None else self.keep_on_error,
                     'error_occurred': False,
                     'manual_cleanup': False,
-                    'cleanup_scheduled': False
+                    'cleanup_scheduled': False,
+                    'storage_path': storage_path
                 }
             
             logger.debug(f"Created temporary directory: {temp_dir}")
@@ -172,13 +185,13 @@ class TempFileManager:
         try:
             with self._lock:
                 if temp_dir in self._temp_directories:
+                    # Delete from storage backend
+                    self.storage.delete_directory(temp_dir)
+                    # Remove from tracking
                     del self._temp_directories[temp_dir]
-            
-            if os.path.exists(temp_dir):
-                cleanup_directory(temp_dir, force=True)
-                logger.info(f"Cleaned up temporary directory: {temp_dir}")
-            else:
-                logger.debug(f"Directory already removed: {temp_dir}")
+                    logger.info(f"Cleaned up temporary directory: {temp_dir}")
+                else:
+                    logger.debug(f"Directory not tracked, skipping cleanup: {temp_dir}")
         
         except Exception as e:
             logger.error(f"Failed to cleanup directory {temp_dir}: {e}")
@@ -217,7 +230,7 @@ class TempFileManager:
                     'keep_on_error': info['keep_on_error'],
                     'error_occurred': info['error_occurred'],
                     'cleanup_scheduled': info['cleanup_scheduled'],
-                    'exists': os.path.exists(temp_dir)
+                    'storage_path': info.get('storage_path', '')
                 }
                 for temp_dir, info in self._temp_directories.items()
             ]
@@ -247,17 +260,18 @@ class TempFileManager:
             total_dirs = len(self._temp_directories)
             error_dirs = sum(1 for info in self._temp_directories.values() if info['error_occurred'])
             scheduled_dirs = sum(1 for info in self._temp_directories.values() if info['cleanup_scheduled'])
-            existing_dirs = sum(1 for temp_dir in self._temp_directories.keys() if os.path.exists(temp_dir))
+        
+        storage_type = os.getenv('STORAGE_BACKEND', 'LOCAL').upper()
         
         return {
             'total_directories': total_dirs,
             'directories_with_errors': error_dirs,
             'scheduled_for_cleanup': scheduled_dirs,
-            'existing_directories': existing_dirs,
             'cleanup_enabled': self.enabled,
             'development_mode': self.development_mode,
             'default_delay_seconds': self.delay_seconds,
-            'active_cleanup_threads': len([t for t in self._cleanup_threads if t.is_alive()])
+            'active_cleanup_threads': len([t for t in self._cleanup_threads if t.is_alive()]),
+            'storage_backend': storage_type
         }
     
     def set_config(self, config: Dict[str, Any]) -> None:
@@ -294,16 +308,16 @@ class TempFileManager:
             if thread.is_alive():
                 thread.join(timeout=5)
     
-    def create_temp_file(self, temp_dir: str, filename: str, content: bytes = b"") -> str:
+    def create_temp_file(self, temp_dir: str, filename: str, content: Union[bytes, BinaryIO] = b"") -> str:
         """Create a temporary file within a managed directory."""
         try:
             if temp_dir not in self._temp_directories:
                 raise TempFileError(f"Directory not managed by TempFileManager: {temp_dir}")
             
-            file_path = os.path.join(temp_dir, filename)
+            file_path = f"{temp_dir}/{filename}"
             
-            with open(file_path, 'wb') as f:
-                f.write(content)
+            # Save to storage backend
+            storage_path = self.storage.save_file(file_path, content)
             
             logger.debug(f"Created temporary file: {file_path}")
             return file_path
@@ -317,24 +331,35 @@ class TempFileManager:
             if temp_dir not in self._temp_directories:
                 raise TempFileError(f"Directory not managed by TempFileManager: {temp_dir}")
             
-            file_path = os.path.join(temp_dir, filename)
+            file_path = f"{temp_dir}/{filename}"
             
-            if hasattr(file_obj, 'save'):
-                # Flask FileStorage object
-                file_obj.save(file_path)
+            # Save to storage backend
+            if hasattr(file_obj, 'read'):
+                storage_path = self.storage.save_file(file_path, file_obj)
             else:
-                # File-like object
-                with open(file_path, 'wb') as dest:
-                    if hasattr(file_obj, 'read'):
-                        shutil.copyfileobj(file_obj, dest)
-                    else:
-                        dest.write(file_obj)
+                storage_path = self.storage.save_file(file_path, file_obj)
             
             logger.debug(f"Saved file to temporary directory: {file_path}")
-            return file_path
+            # Return the full storage path instead of the relative path
+            return storage_path
         
         except Exception as e:
             raise TempFileError(f"Failed to save file to temporary directory: {e}")
+    
+    def get_file_content(self, file_path: str) -> bytes:
+        """Get content of a file from storage."""
+        try:
+            return self.storage.read_file(file_path)
+        except Exception as e:
+            raise TempFileError(f"Failed to read file content: {e}")
+    
+    def get_public_url(self, file_path: str, expiration_seconds: int = 3600) -> Optional[str]:
+        """Get a public URL for accessing the file."""
+        try:
+            return self.storage.get_public_url(file_path, expiration_seconds)
+        except Exception as e:
+            logger.error(f"Failed to get public URL for {file_path}: {e}")
+            return None
     
     def __del__(self) -> None:
         """Cleanup on object destruction."""
