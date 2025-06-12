@@ -173,6 +173,7 @@ class ExcelProcessor:
         column_mappings = config.get('column_mappings', {})
 
         data = {}
+        field_types = {}  # Store field type information
 
         try:
             if orientation == 'horizontal':
@@ -186,16 +187,29 @@ class ExcelProcessor:
                     value_cell = worksheet.cell(row=values_row, column=col)
 
                     if key_cell.value and not is_empty_cell_value(key_cell.value):
-                        key = str(key_cell.value).strip()
+                        original_key = str(key_cell.value).strip()
                         value = value_cell.value
 
                         # Apply column mapping if available
-                        if key in column_mappings:
-                            key = column_mappings[key]
+                        if original_key in column_mappings:
+                            mapping = column_mappings[original_key]
+                            if isinstance(mapping, str):
+                                # Legacy format - just a string
+                                mapped_key = mapping
+                                field_type = "text"  # Default type
+                            else:
+                                # New format - object with name and type
+                                mapped_key = mapping.get("name", normalize_column_name(original_key))
+                                field_type = mapping.get("type", "text")
                         else:
-                            key = normalize_column_name(key)
+                            mapped_key = normalize_column_name(original_key)
+                            field_type = "text"  # Default type
 
-                        data[key] = value
+                        data[mapped_key] = value
+                        
+                        # Store field type if not the default text type
+                        if field_type != "text":
+                            field_types[mapped_key] = field_type
             else:
                 # Vertical orientation: keys in one column, values in adjacent column
                 keys_col = header_col + config.get('headers_row_offset', 0)
@@ -207,16 +221,33 @@ class ExcelProcessor:
                     value_cell = worksheet.cell(row=row, column=values_col)
 
                     if key_cell.value and not is_empty_cell_value(key_cell.value):
-                        key = str(key_cell.value).strip()
+                        original_key = str(key_cell.value).strip()
                         value = value_cell.value
 
                         # Apply column mapping if available
-                        if key in column_mappings:
-                            key = column_mappings[key]
+                        if original_key in column_mappings:
+                            mapping = column_mappings[original_key]
+                            if isinstance(mapping, str):
+                                # Legacy format - just a string
+                                mapped_key = mapping
+                                field_type = "text"  # Default type
+                            else:
+                                # New format - object with name and type
+                                mapped_key = mapping.get("name", normalize_column_name(original_key))
+                                field_type = mapping.get("type", "text")
                         else:
-                            key = normalize_column_name(key)
+                            mapped_key = normalize_column_name(original_key)
+                            field_type = "text"  # Default type
 
-                        data[key] = value
+                        data[mapped_key] = value
+                        
+                        # Store field type if not the default text type
+                        if field_type != "text":
+                            field_types[mapped_key] = field_type
+
+            # Add field type metadata if we have any non-text fields
+            if field_types:
+                data["_field_types"] = field_types
 
         except Exception as e:
             raise ExcelProcessingError(f"Failed to extract key-value pairs: {e}")
@@ -236,6 +267,8 @@ class ExcelProcessor:
             # Extract headers
             headers = []
             original_headers = []  # Store original headers for mapping
+            field_types = {}  # Store field types for each header
+            
             for col_offset in range(max_columns):
                 col = header_col + col_offset
                 header_cell = worksheet.cell(row=headers_row, column=col)
@@ -246,11 +279,21 @@ class ExcelProcessor:
                     
                     # Apply column mapping if available
                     if header in column_mappings:
-                        mapped_header = column_mappings[header]
+                        mapping = column_mappings[header]
+                        if isinstance(mapping, str):
+                            # Legacy format - just a string
+                            mapped_header = mapping
+                            field_type = "text"  # Default type
+                        else:
+                            # New format - object with name and type
+                            mapped_header = mapping.get("name", normalize_column_name(header))
+                            field_type = mapping.get("type", "text")
                     else:
                         mapped_header = normalize_column_name(header)
+                        field_type = "text"  # Default type
                     
                     headers.append(mapped_header)
+                    field_types[mapped_header] = field_type
                 else:
                     break  # Stop when we hit an empty header
 
@@ -275,6 +318,13 @@ class ExcelProcessor:
 
                     # Use the mapped header name for the key
                     row_data[header] = value
+                    
+                    # Store field type as metadata if not the default text type
+                    field_type = field_types.get(header, "text")
+                    if field_type != "text":
+                        if "_field_types" not in row_data:
+                            row_data["_field_types"] = {}
+                        row_data["_field_types"][header] = field_type
 
                 if not has_data:
                     # Empty row found, stop extraction

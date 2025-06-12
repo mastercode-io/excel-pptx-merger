@@ -53,7 +53,26 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                                                 "data_row_offset": {"type": "integer"},
                                                 "max_columns": {"type": "integer"},
                                                 "max_rows": {"type": "integer"},
-                                                "column_mappings": {"type": "object"}
+                                                "column_mappings": {
+                                                    "type": "object",
+                                                    "patternProperties": {
+                                                        ".*": {
+                                                            "oneOf": [
+                                                                {
+                                                                    "type": "string"  # For backward compatibility
+                                                                },
+                                                                {
+                                                                    "type": "object",
+                                                                    "properties": {
+                                                                        "name": {"type": "string"},
+                                                                        "type": {"type": "string", "enum": ["text", "image", "number", "date", "boolean"]}
+                                                                    },
+                                                                    "required": ["name"]
+                                                                }
+                                                            ]
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     },
@@ -77,6 +96,25 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                             "keep_on_error": {"type": "boolean"},
                             "development_mode": {"type": "boolean"}
                         }
+                    },
+                    "image_storage": {
+                        "type": "object",
+                        "properties": {
+                            "development_mode": {
+                                "type": "object",
+                                "properties": {
+                                    "directory": {"type": "string"},
+                                    "cleanup_after_merge": {"type": "boolean"}
+                                }
+                            },
+                            "production_mode": {
+                                "type": "object",
+                                "properties": {
+                                    "directory": {"type": "string"},
+                                    "cleanup_after_merge": {"type": "boolean"}
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -85,6 +123,18 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
     }
     
     validate_json_schema(config, schema)
+
+
+def get_field_type_from_mapping(column_mapping: Union[str, Dict[str, Any]]) -> str:
+    """Extract field type from column mapping.
+    
+    Supports both old format (string) and new format (object with name and type).
+    Default type is 'text' if not specified.
+    """
+    if isinstance(column_mapping, str):
+        return "text"  # Default type for backward compatibility
+    
+    return column_mapping.get("type", "text")
 
 
 def validate_merge_fields(template_text: str) -> List[str]:

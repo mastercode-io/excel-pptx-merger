@@ -191,11 +191,13 @@ class PowerPointProcessor:
 
             # Try to find image for the first merge field
             for field in merge_fields:
-                image_path = self._get_image_for_field(field, data, images)
-                if image_path and os.path.exists(image_path):
-                    # Replace the text shape with an image
-                    self._replace_shape_with_image(shape, image_path)
-                    return True
+                # Check if this is an image field
+                if self._is_image_field(field, data):
+                    image_path = self._get_image_for_field(field, data, images)
+                    if image_path:
+                        # Replace the text shape with an image
+                        self._replace_shape_with_image(shape, image_path)
+                        return True
 
             return False
 
@@ -203,17 +205,96 @@ class PowerPointProcessor:
             logger.warning(f"Failed to replace text with image: {e}")
             return False
 
+    def _get_field_type(self, field_name: str, data: Dict[str, Any]) -> str:
+        """Get the type of a field from metadata.
+        
+        Args:
+            field_name: The field name or path to check
+            data: The data structure containing field values and metadata
+            
+        Returns:
+            The field type as a string ('text', 'image', etc.)
+        """
+        # Check for direct field type in the current data level
+        if "_field_types" in data and field_name in data["_field_types"]:
+            return data["_field_types"][field_name]
+        
+        # For nested fields, try to navigate to the parent object
+        parts = field_name.split('.')
+        if len(parts) > 1:
+            # Try to find the parent object
+            current_data = data
+            parent_path = '.'.join(parts[:-1])
+            leaf_name = parts[-1]
+            
+            # First try direct path
+            parent = self._get_field_value(parent_path, data)
+            
+            if parent and isinstance(parent, dict):
+                if "_field_types" in parent and leaf_name in parent["_field_types"]:
+                    return parent["_field_types"][leaf_name]
+            
+            # Try to find in sheet data
+            for sheet_name, sheet_data in data.items():
+                if isinstance(sheet_data, dict):
+                    # Try to find the field in this sheet
+                    for table_name, table_data in sheet_data.items():
+                        if isinstance(table_data, list):
+                            # Check each row in the table
+                            for row in table_data:
+                                if isinstance(row, dict) and "_field_types" in row and leaf_name in row["_field_types"]:
+                                    return row["_field_types"][leaf_name]
+        
+        # Default to text if no type information is found
+        return "text"
+    
+    def _is_image_field(self, field_name: str, data: Dict[str, Any]) -> bool:
+        """Determine if a field is an image field based on metadata."""
+        field_type = self._get_field_type(field_name, data)
+        return field_type == "image"
+    
+    def _is_image_placeholder(self, text_content: str) -> bool:
+        """Check if text content is an image placeholder.
+        
+        Now uses field type information when available, falling back to
+        heuristic detection only when necessary.
+        """
+        if not text_content:
+            return False
+        
+        # Extract merge fields
+        merge_fields = validate_merge_fields(text_content)
+        if not merge_fields:
+            return False
+        
+        # We'll check the field type when we have the data
+        # For now, just return True if it looks like an image placeholder
+        # This will be refined when we have the actual data and field types
+        return any('image' in field.lower() for field in merge_fields)
+
     def _get_image_for_field(self, field_name: str, data: Dict[str, Any],
                             images: Dict[str, List[Dict[str, Any]]]) -> Optional[str]:
         """Get image path for a specific field."""
         try:
+            # Check if this is an image field based on metadata
+            is_image = self._is_image_field(field_name, data)
+            
             # First try to get image path from data
             image_path = self._get_field_value(field_name, data)
-            if image_path and os.path.exists(str(image_path)):
-                return str(image_path)
+            if image_path:
+                if is_image:
+                    logger.debug(f"Found image path in data for field '{field_name}': {image_path}")
+                    return str(image_path)
+                else:
+                    logger.debug(f"Field '{field_name}' is not an image field, but has value: {image_path}")
+                    # Not an image field, don't return the path
+                    return None
 
-            # Try position-based matching
-            return self._find_image_by_field_name(field_name, images)
+            # If field is an image but we didn't find a path, try position-based matching
+            if is_image:
+                return self._find_image_by_field_name(field_name, images)
+            
+            return None
 
         except Exception as e:
             logger.warning(f"Failed to get image for field '{field_name}': {e}")
@@ -350,44 +431,98 @@ class PowerPointProcessor:
             # Handle nested field references like "table.0.field_name"
             field_parts = field_name.split('.')
             current_value = data
-
+            
+            # Debug logging
+            logger.debug(f"Getting field value for: {field_name}")
+            logger.debug(f"Data keys at root level: {list(data.keys())}")
+            
+            # First try direct path resolution
             for part in field_parts:
                 if isinstance(current_value, dict):
                     current_value = current_value.get(part)
+                    logger.debug(f"After part '{part}': {type(current_value).__name__}")
                 elif isinstance(current_value, list):
                     try:
                         index = int(part)
                         current_value = current_value[index] if 0 <= index < len(current_value) else None
+                        logger.debug(f"After list index {index}: {type(current_value).__name__}")
                     except (ValueError, IndexError):
                         current_value = None
+                        logger.debug(f"Invalid list index: {part}")
                 else:
                     current_value = None
-
+                    logger.debug(f"Cannot navigate further from {type(current_value).__name__}")
+                
                 if current_value is None:
                     break
-
+            
+            # If direct path failed and we have sheet data, try looking in each sheet
+            if current_value is None:
+                logger.debug("Direct path resolution failed, trying sheet-nested lookup")
+                # Try to find the field in sheet data (e.g., order_form.image_search.0.field)
+                for sheet_name, sheet_data in data.items():
+                    # Skip metadata and debug fields
+                    if sheet_name.startswith('__'):
+                        continue
+                        
+                    # Check if this sheet contains the first part of our field path
+                    if isinstance(sheet_data, dict) and field_parts[0] in sheet_data:
+                        logger.debug(f"Found {field_parts[0]} in sheet {sheet_name}")
+                        # Start with the sheet data
+                        nested_value = sheet_data
+                        
+                        # Navigate through the field parts
+                        for part in field_parts:
+                            if isinstance(nested_value, dict):
+                                nested_value = nested_value.get(part)
+                            elif isinstance(nested_value, list):
+                                try:
+                                    index = int(part)
+                                    nested_value = nested_value[index] if 0 <= index < len(nested_value) else None
+                                except (ValueError, IndexError):
+                                    nested_value = None
+                            else:
+                                nested_value = None
+                                
+                            if nested_value is None:
+                                break
+                                
+                        if nested_value is not None:
+                            logger.debug(f"Found value via sheet-nested lookup: {nested_value}")
+                            return nested_value
+                
+                # Special handling for flat structures without row index
+                # For fields like "client_info.client_name" (without row index)
+                if len(field_parts) >= 2:
+                    table_name = field_parts[0]
+                    field_key = field_parts[-1]
+                    
+                    # Look for the table in each sheet
+                    for sheet_name, sheet_data in data.items():
+                        if isinstance(sheet_data, dict) and table_name in sheet_data:
+                            table_data = sheet_data[table_name]
+                            
+                            # Case 1: Table is a flat dictionary (key-value pairs)
+                            if isinstance(table_data, dict) and field_key in table_data:
+                                value = table_data[field_key]
+                                logger.debug(f"Found value in flat structure {table_name}.{field_key}: {value}")
+                                return value
+                            
+                            # Case 2: Table is a list with a single item
+                            elif isinstance(table_data, list) and len(table_data) > 0:
+                                # Try first row if no index specified
+                                first_row = table_data[0]
+                                if isinstance(first_row, dict) and field_key in first_row:
+                                    value = first_row[field_key]
+                                    logger.debug(f"Found value in first row of {table_name}[0].{field_key}: {value}")
+                                    return value
+            
+            logger.debug(f"Final value: {current_value}")
             return current_value
 
         except Exception as e:
             logger.warning(f"Failed to get field value for '{field_name}': {e}")
             return None
-
-    def _is_image_placeholder(self, text: str) -> bool:
-        """Check if text represents an image placeholder."""
-        # Look for patterns like {{image_name}} or similar
-        image_patterns = [
-            r'\{\{.*image.*\}\}',
-            r'\{\{.*img.*\}\}',
-            r'\{\{.*photo.*\}\}',
-            r'\{\{.*picture.*\}\}'
-        ]
-
-        text_lower = text.lower()
-        for pattern in image_patterns:
-            if re.search(pattern, text_lower):
-                return True
-
-        return False
 
     def _replace_image_placeholder(self, slide, shape: BaseShape, data: Dict[str, Any],
                                   images: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> None:
@@ -407,83 +542,27 @@ class PowerPointProcessor:
             image_field = merge_fields[0]
             image_path = self._get_image_for_field(image_field, data, images)
 
-            if image_path and os.path.exists(image_path):
-                # Get shape position and size
-                left = shape.left
-                top = shape.top
-                width = shape.width
-                height = shape.height
+            if image_path:
+                try:
+                    # Get shape position and size
+                    left = shape.left
+                    top = shape.top
+                    width = shape.width
+                    height = shape.height
 
-                # Remove the placeholder shape
-                slide.shapes._spTree.remove(shape._element)
+                    # Remove the placeholder shape
+                    slide.shapes._spTree.remove(shape._element)
 
-                # Add the image
-                slide.shapes.add_picture(image_path, left, top, width, height)
-                logger.debug(f"Replaced image placeholder with: {image_path}")
+                    # Add the image
+                    slide.shapes.add_picture(image_path, left, top, width, height)
+                    logger.debug(f"Replaced image placeholder with: {image_path}")
+                except Exception as img_error:
+                    logger.warning(f"Failed to add image '{image_path}': {img_error}")
+                    # Keep the original placeholder if image insertion fails
+                    pass
 
         except Exception as e:
             logger.warning(f"Failed to replace image placeholder: {e}")
-
-    def validate_template(self) -> Dict[str, Any]:
-        """Validate template and return information about merge fields and structure."""
-        if not self.presentation:
-            self._validate_template()
-
-        try:
-            validation_info = {
-                'slide_count': len(self.presentation.slides),
-                'merge_fields': self.get_merge_fields(),
-                'image_placeholders': self._get_image_placeholders(),
-                'slides': []
-            }
-
-            for slide_idx, slide in enumerate(self.presentation.slides):
-                slide_info = {
-                    'slide_number': slide_idx + 1,
-                    'shape_count': len(slide.shapes),
-                    'merge_fields': self._extract_slide_merge_fields(slide),
-                    'image_placeholders': self._get_slide_image_placeholders(slide),
-                    'has_tables': any(shape.shape_type == MSO_SHAPE_TYPE.TABLE for shape in slide.shapes),
-                    'has_images': any(shape.shape_type == MSO_SHAPE_TYPE.PICTURE for shape in slide.shapes)
-                }
-                validation_info['slides'].append(slide_info)
-
-            return validation_info
-
-        except Exception as e:
-            raise PowerPointProcessingError(f"Template validation failed: {e}")
-
-    def _get_image_placeholders(self) -> List[str]:
-        """Get all image placeholders from the presentation."""
-        placeholders = []
-
-        try:
-            for slide in self.presentation.slides:
-                slide_placeholders = self._get_slide_image_placeholders(slide)
-                placeholders.extend(slide_placeholders)
-        except Exception as e:
-            logger.warning(f"Failed to get image placeholders: {e}")
-
-        return list(set(placeholders))  # Remove duplicates
-
-    def _get_slide_image_placeholders(self, slide) -> List[str]:
-        """Get image placeholders from a single slide."""
-        placeholders = []
-
-        try:
-            for shape in slide.shapes:
-                if hasattr(shape, 'text_frame') and shape.text_frame:
-                    text_content = self._get_full_text_from_shape(shape)
-                    if text_content and self._is_image_placeholder(text_content):
-                        merge_fields = validate_merge_fields(text_content)
-                        placeholders.extend(merge_fields)
-                elif hasattr(shape, 'text') and shape.text and self._is_image_placeholder(shape.text):
-                    merge_fields = validate_merge_fields(shape.text)
-                    placeholders.extend(merge_fields)
-        except Exception as e:
-            logger.warning(f"Failed to get slide image placeholders: {e}")
-
-        return placeholders
 
     def preview_merge(self, data: Dict[str, Any],
                      images: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Dict[str, Any]:
@@ -498,8 +577,7 @@ class PowerPointProcessor:
                 'field_values': {},
                 'image_mappings': {},
                 'missing_fields': [],
-                'missing_images': [],
-                'template_info': self.validate_template()
+                'missing_images': []
             }
 
             # Check which fields will be populated
@@ -516,7 +594,7 @@ class PowerPointProcessor:
                     image_path = self._get_image_for_field(placeholder, data, images)
                     preview['image_mappings'][placeholder] = image_path
 
-                    if not image_path or not os.path.exists(image_path):
+                    if not image_path:
                         preview['missing_images'].append(placeholder)
             else:
                 preview['missing_images'] = image_placeholders.copy()
@@ -580,3 +658,64 @@ class PowerPointProcessor:
         """Close the presentation and free resources."""
         # python-pptx doesn't require explicit closing, but we'll reset the reference
         self.presentation = None
+
+    def validate_template(self) -> Dict[str, Any]:
+        """Validate template and return information about merge fields and structure."""
+        if not self.presentation:
+            self._validate_template()
+
+        try:
+            validation_info = {
+                'slide_count': len(self.presentation.slides),
+                'merge_fields': self.get_merge_fields(),
+                'image_placeholders': self._get_image_placeholders(),
+                'slides': []
+            }
+
+            for slide_idx, slide in enumerate(self.presentation.slides):
+                slide_info = {
+                    'slide_number': slide_idx + 1,
+                    'shape_count': len(slide.shapes),
+                    'merge_fields': self._extract_slide_merge_fields(slide),
+                    'image_placeholders': self._get_slide_image_placeholders(slide),
+                    'has_tables': any(shape.shape_type == MSO_SHAPE_TYPE.TABLE for shape in slide.shapes),
+                    'has_images': any(shape.shape_type == MSO_SHAPE_TYPE.PICTURE for shape in slide.shapes)
+                }
+                validation_info['slides'].append(slide_info)
+
+            return validation_info
+
+        except Exception as e:
+            raise PowerPointProcessingError(f"Template validation failed: {e}")
+
+    def _get_image_placeholders(self) -> List[str]:
+        """Get all image placeholders from the presentation."""
+        placeholders = []
+
+        try:
+            for slide in self.presentation.slides:
+                slide_placeholders = self._get_slide_image_placeholders(slide)
+                placeholders.extend(slide_placeholders)
+        except Exception as e:
+            logger.warning(f"Failed to get image placeholders: {e}")
+
+        return list(set(placeholders))  # Remove duplicates
+
+    def _get_slide_image_placeholders(self, slide) -> List[str]:
+        """Get image placeholders from a single slide."""
+        placeholders = []
+
+        try:
+            for shape in slide.shapes:
+                if hasattr(shape, 'text_frame') and shape.text_frame:
+                    text_content = self._get_full_text_from_shape(shape)
+                    if text_content and self._is_image_placeholder(text_content):
+                        merge_fields = validate_merge_fields(text_content)
+                        placeholders.extend(merge_fields)
+                elif hasattr(shape, 'text') and shape.text and self._is_image_placeholder(shape.text):
+                    merge_fields = validate_merge_fields(shape.text)
+                    placeholders.extend(merge_fields)
+        except Exception as e:
+            logger.warning(f"Failed to get slide image placeholders: {e}")
+
+        return placeholders

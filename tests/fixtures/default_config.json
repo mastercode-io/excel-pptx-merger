@@ -18,12 +18,30 @@
             "data_row_offset": 1,
             "max_columns": 6,
             "column_mappings": {
-              "Client": "client_name",
-              "Word Or Image": "search_type",
-              "G&S Classes": "gs_classes",
-              "SIC": "sic_code",
-              "Nature of business": "business_nature",
-              "Designated Countries": "countries"
+              "Client": {
+                "name": "client_name",
+                "type": "text"
+              },
+              "Word Or Image": {
+                "name": "search_type",
+                "type": "text"
+              },
+              "G&S Classes": {
+                "name": "gs_classes",
+                "type": "text"
+              },
+              "SIC": {
+                "name": "sic_code",
+                "type": "text"
+              },
+              "Nature of business": {
+                "name": "business_nature",
+                "type": "text"
+              },
+              "Designated Countries": {
+                "name": "countries",
+                "type": "text"
+              }
             }
           }
         },
@@ -43,9 +61,18 @@
             "max_columns": 3,
             "max_rows": 10,
             "column_mappings": {
-              "Word": "word",
-              "Search Criteria": "search_criteria",
-              "Remarks": "remarks"
+              "Word": {
+                "name": "word",
+                "type": "text"
+              },
+              "Search Criteria": {
+                "name": "search_criteria",
+                "type": "text"
+              },
+              "Remarks": {
+                "name": "remarks",
+                "type": "text"
+              }
             }
           }
         },
@@ -65,9 +92,18 @@
             "max_columns": 3,
             "max_rows": 10,
             "column_mappings": {
-              "Image": "image",
-              "Search Criteria": "search_criteria",
-              "Image Class.Division.Subdivision": "image_classification"
+              "Image": {
+                "name": "image",
+                "type": "image"
+              },
+              "Search Criteria": {
+                "name": "search_criteria",
+                "type": "text"
+              },
+              "Image Class.Division.Subdivision": {
+                "name": "image_classification",
+                "type": "text"
+              }
             }
           }
         }
@@ -88,7 +124,7 @@
         "cleanup_after_merge": false
       },
       "production_mode": {
-        "directory": "temp",
+        "directory": "temp/images",
         "cleanup_after_merge": true
       }
     },
