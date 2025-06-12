@@ -352,27 +352,57 @@ class PowerPointProcessor:
         """Replace a text shape with an image."""
         try:
             # Get the slide that contains this shape
-            slide = shape._element.getparent().getparent()  # Navigate up to slide
-
+            slide = None
+            parent = shape.part
+            if hasattr(parent, 'slide') and parent.slide:
+                slide = parent.slide
+            
+            if not slide:
+                logger.error("Could not find slide for shape")
+                return
+                
             # Get shape position and size
             left = shape.left
             top = shape.top
             width = shape.width
             height = shape.height
-
+            
+            # Store shape index before removing
+            shape_idx = None
+            try:
+                shape_idx = slide.shapes._spTree.index(shape._element)
+            except (ValueError, AttributeError):
+                pass
+                
             # Remove the original shape
-            shape_element = shape._element
-            shape_element.getparent().remove(shape_element)
-
+            try:
+                shape_element = shape._element
+                shape_element.getparent().remove(shape_element)
+            except Exception as e:
+                logger.warning(f"Error removing shape: {e}")
+            
             # Add the image at the same position
-            # Note: This is a simplified approach - in practice, you might want to
-            # access the slide object properly through the presentation
-            logger.info(f"Would replace shape with image: {image_path}")
-            # For now, we'll log this action - full implementation would require
-            # accessing the slide object to add the picture
-
+            try:
+                logger.info(f"Adding image at position: left={left}, top={top}, width={width}, height={height}")
+                slide.shapes.add_picture(image_path, left, top, width, height)
+                logger.info(f"Successfully added image: {image_path}")
+            except Exception as e:
+                logger.error(f"Failed to add image: {e}")
+                # Try alternative method if the first one fails
+                try:
+                    from pptx.util import Inches
+                    # Convert EMU to inches as a fallback
+                    left_inches = Inches(left / 914400)
+                    top_inches = Inches(top / 914400)
+                    width_inches = Inches(width / 914400)
+                    height_inches = Inches(height / 914400)
+                    slide.shapes.add_picture(image_path, left_inches, top_inches, width_inches, height_inches)
+                    logger.info(f"Successfully added image using alternative method: {image_path}")
+                except Exception as alt_e:
+                    logger.error(f"Alternative method also failed: {alt_e}")
+                
         except Exception as e:
-            logger.warning(f"Failed to replace shape with image: {e}")
+            logger.error(f"Failed to replace shape with image: {e}")
 
     def _process_paragraph(self, paragraph, data: Dict[str, Any]) -> None:
         """Process a single paragraph for merge field replacement."""
