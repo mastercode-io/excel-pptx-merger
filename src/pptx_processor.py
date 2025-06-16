@@ -442,12 +442,35 @@ class PowerPointProcessor:
             width = shape.width
             height = shape.height
             
+            # Clear the text from the shape before removing it
+            if hasattr(shape, 'text_frame'):
+                try:
+                    # Clear any text in the shape
+                    shape.text_frame.text = ""
+                    logger.debug(f"Cleared text from shape before replacement")
+                except Exception as text_err:
+                    logger.warning(f"Could not clear text from shape: {text_err}")
+            
             # Remove the original shape
             shape_id = shape.shape_id
             sp_tree = slide.shapes._spTree
             for idx, sp in enumerate(sp_tree.findall('.//{*}sp')):
                 if sp.get('id') == str(shape_id):
+                    # Before removing, check if we need to handle any special properties
+                    try:
+                        # Check for any text or other content that might still be visible
+                        txBody = sp.find('.//{*}txBody')
+                        if txBody is not None:
+                            # Clear all text paragraphs
+                            for p in txBody.findall('.//{*}p'):
+                                txBody.remove(p)
+                            logger.debug(f"Cleared text body XML elements from shape")
+                    except Exception as xml_err:
+                        logger.warning(f"Error clearing XML text elements: {xml_err}")
+                    
+                    # Now remove the shape
                     sp_tree.remove(sp)
+                    logger.debug(f"Removed shape with ID {shape_id} from slide")
                     break
             
             # Add the image while maintaining aspect ratio
@@ -475,13 +498,31 @@ class PowerPointProcessor:
                     new_top = top
                 
                 # Add the image to the slide
-                slide.shapes.add_picture(
+                picture = slide.shapes.add_picture(
                     image_path,
                     new_left,
                     new_top,
                     new_width,
                     new_height
                 )
+                
+                # Ensure the image is on top (higher z-order)
+                # This is done by moving the picture to the end of the shapes collection
+                try:
+                    pic_element = None
+                    for shape_xml in sp_tree.findall('.//{*}pic'):
+                        if shape_xml.get('id') == str(picture.shape_id):
+                            pic_element = shape_xml
+                            break
+                    
+                    if pic_element is not None and pic_element.getparent() is not None:
+                        # Remove and re-append to put it at the end (top of z-order)
+                        parent = pic_element.getparent()
+                        parent.remove(pic_element)
+                        parent.append(pic_element)
+                        logger.debug(f"Adjusted z-order to ensure image is on top")
+                except Exception as z_err:
+                    logger.warning(f"Could not adjust z-order: {z_err}")
                 
                 logger.info(f"Successfully replaced shape with image: {image_path}")
                 return True
