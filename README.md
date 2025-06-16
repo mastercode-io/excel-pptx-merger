@@ -45,7 +45,22 @@ cp .env.example .env
 nano .env
 ```
 
-### 3. Start Development Server
+### 3. Local Development Folder Structure
+
+The application uses a standardized folder structure for temporary files:
+
+```
+.temp/                     # Local development temporary directory
+├── excel_pptx_merger_*    # Unique session directory
+    ├── input/             # Uploaded Excel and PowerPoint files
+    ├── output/            # Generated merged PowerPoint files
+    ├── images/            # Extracted images from Excel files
+    └── debug/             # Debug information (in development mode)
+```
+
+This structure is automatically created when you run the application. The `.temp` directory is included in `.gitignore` to prevent temporary files from being committed.
+
+### 4. Start Development Server
 
 ```bash
 # Using the convenience script
@@ -58,7 +73,7 @@ uv run python -m src.main serve --debug
 docker-compose -f docker/docker-compose.yml up
 ```
 
-### 4. Test the API
+### 5. Test the API
 
 ```bash
 # Health check

@@ -11,6 +11,8 @@ from flask import Flask, request, jsonify, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
 import click
 import functions_framework
+import shutil
+import uuid
 
 from .config_manager import ConfigManager
 from .excel_processor import ExcelProcessor
@@ -155,146 +157,191 @@ def health() -> Tuple[Dict[str, Any], int]:
 @app.route('/api/v1/merge', methods=['POST'])
 def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
     """Main file processing endpoint with enhanced image support."""
-    temp_manager = None
-    temp_dir = None
-
     try:
-        # Validate request
-        if 'excel_file' not in request.files or 'pptx_file' not in request.files:
-            raise ValidationError("Both 'excel_file' and 'pptx_file' are required")
-
-        excel_file = request.files['excel_file']
-        pptx_file = request.files['pptx_file']
-
-        if excel_file.filename == '' or pptx_file.filename == '':
-            raise ValidationError("File names cannot be empty")
-
-        # Validate file extensions
-        allowed_extensions = app_config['allowed_extensions']
-        if not excel_file.filename.lower().endswith('.xlsx'):
-            raise ValidationError("Excel file must have .xlsx extension")
-
-        if not pptx_file.filename.lower().endswith('.pptx'):
-            raise ValidationError("PowerPoint file must have .pptx extension")
-
-        # Get configuration
-        config_data = request.form.get('config')
-        if config_data:
+        # Get files from request
+        excel_file = request.files.get('excel_file')
+        pptx_file = request.files.get('pptx_file')
+        
+        # Check if files are provided
+        if not excel_file or not pptx_file:
+            return jsonify({'error': 'Excel and PowerPoint files are required'}), 400
+        
+        # Get extraction configuration
+        extraction_config = {}
+        if 'config' in request.form:
             try:
-                extraction_config = json.loads(config_data)
+                extraction_config = json.loads(request.form.get('config', '{}'))
             except json.JSONDecodeError as e:
-                raise ValidationError(f"Invalid JSON configuration: {e}")
+                logger.error(f"Invalid JSON configuration: {e}")
+                return jsonify({'error': f'Invalid JSON configuration: {e}'}), 400
+        elif request.is_json:
+            extraction_config = request.json or {}
+            
+        logger.debug(f"Extraction config: {extraction_config}")
+        
+        # Get session ID from headers or generate a new one
+        session_id = request.headers.get('X-Session-ID')
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            logger.info(f"Generated new session ID: {session_id}")
         else:
-            extraction_config = config_manager.get_default_config()
-
-        # Validate configuration
-        config_manager.validate_runtime_config(extraction_config)
-
-        # Initialize temp file manager
-        temp_file_config = extraction_config.get('global_settings', {}).get('temp_file_cleanup', {})
-        temp_manager = TempFileManager(temp_file_config)
-
-        # Create temporary directory
-        temp_dir = temp_manager.create_temp_directory()
-
-        # Save uploaded files
+            logger.info(f"Using provided session ID: {session_id}")
+        
+        # Create temp file manager
+        temp_manager = TempFileManager()
+        
+        # Get or create session directory
+        temp_dir = temp_manager.get_session_directory(session_id)
+        logger.info(f"Using session directory: {temp_dir}")
+        
+        # Save uploaded files to temp directory
         excel_path = temp_manager.save_file_to_temp(
-            temp_dir, f"input_{excel_file.filename}", excel_file
+            temp_dir, excel_file.filename, excel_file, 
+            temp_manager.FILE_TYPE_INPUT
         )
         pptx_path = temp_manager.save_file_to_temp(
-            temp_dir, f"template_{pptx_file.filename}", pptx_file
+            temp_dir, pptx_file.filename, pptx_file,
+            temp_manager.FILE_TYPE_INPUT
         )
-
-        logger.info(f"Processing files: {excel_file.filename} + {pptx_file.filename}")
-        logger.debug(f"Excel file path: {excel_path}")
-        logger.debug(f"PowerPoint file path: {pptx_path}")
-
+        
+        logger.info(f"Saved input files to: {excel_path}, {pptx_path}")
+        
         # Process Excel file
         excel_processor = ExcelProcessor(excel_path)
+        
         try:
-            # Extract data according to configuration
-            extracted_data = excel_processor.extract_data(
-                extraction_config.get('sheet_configs', {})
-            )
-
-            # Extract images with enhanced position information
-            images = None
-            if extraction_config.get('global_settings', {}).get('image_extraction', {}).get('enabled', True):
-                # Pass the global settings to extract_images
-                images = excel_processor.extract_images(extraction_config.get('global_settings', {}))
-
-                # Link images to the image search table
-                if images:
+            try:
+                # Extract data from Excel
+                extracted_data = excel_processor.extract_data(
+                    extraction_config.get('global_settings', {}),
+                    extraction_config.get('sheet_configs', {})
+                )
+                logger.info(f"Successfully extracted data from Excel file")
+            except Exception as e:
+                logger.error(f"Failed to extract data from Excel: {e}")
+                return jsonify({'error': f'Failed to extract data from Excel: {e}'}), 500
+            
+            # Extract images from Excel file
+            logger.info("Extracting images from Excel file")
+            images = excel_processor.extract_images()
+            
+            # Log the number of images extracted
+            image_count = sum(len(sheet_images) for sheet_images in images.values())
+            logger.info(f"Extracted {image_count} images from Excel file")
+            
+            # Verify images were extracted
+            if image_count == 0:
+                logger.warning("No images were extracted from the Excel file")
+            else:
+                # Link images to the extracted data
+                if extraction_config.get('global_settings', {}).get('image_extraction', {}).get('enabled', True):
                     extracted_data = excel_processor.link_images_to_table(extracted_data, images)
-                    
-                    # Log image extraction summary
-                    image_summary = excel_processor.get_image_summary(images)
-                    logger.info(f"Image extraction summary: {image_summary}")
-
-            # Save debug information in development mode
-            base_filename = os.path.splitext(excel_file.filename)[0]
-            debug_file_path = save_debug_info(extracted_data, images, temp_dir, base_filename)
-
+                    logger.info("Linked images to extracted data")
+                
+                # Log the image paths for debugging
+                for sheet_name, sheet_images in images.items():
+                    logger.info(f"Sheet {sheet_name} has {len(sheet_images)} images")
+                    for img in sheet_images:
+                        logger.debug(f"Image path: {img['path']}")
+                        # Verify the image file exists
+                        if os.path.exists(img['path']):
+                            logger.debug(f"Verified image exists at: {img['path']}")
+                        else:
+                            logger.error(f"Image file does not exist at: {img['path']}")
         finally:
             excel_processor.close()
-
-        # Process PowerPoint template
+        
+        # Process PowerPoint file
         pptx_processor = PowerPointProcessor(pptx_path)
         try:
-            # Generate output filename
-            output_filename = f"merged_{pptx_file.filename}"
-            relative_output_path = os.path.join(temp_dir, output_filename)
+            output_filename = f"merged_{os.path.basename(pptx_file.filename)}"
             
-            # Use storage backend to get the full path
-            output_path = temp_manager.storage._get_full_path(relative_output_path)
-            logger.debug(f"Output file path: {output_path}")
+            # Get the output path using the storage backend
+            merged_file_path = temp_manager.storage.get_output_path(temp_dir, output_filename)
+            
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(merged_file_path), exist_ok=True)
+            
+            # Merge data into PowerPoint and save
+            merged_file_path = pptx_processor.merge_data(extracted_data, merged_file_path, images)
+            
+            # Verify the merged file exists and ensure it's an absolute path
+            if not os.path.isabs(merged_file_path):
+                merged_file_path = os.path.abspath(merged_file_path)
+                
+            if not os.path.exists(merged_file_path):
+                logger.error(f"Merged file does not exist at path: {merged_file_path}")
+                raise FileNotFoundError(f"Merged file not found at: {merged_file_path}")
+            else:
+                logger.debug(f"Verified merged file exists at: {merged_file_path}")
 
-            # Merge data into template with enhanced image support
-            merged_file_path = pptx_processor.merge_data(extracted_data, output_path, images)
-
-            # In development mode, also save a copy to tests/fixtures
+            # In development mode, also save a copy to the debug folder
             if app_config.get('development_mode', False):
-                fixtures_dir = os.path.join(os.getcwd(), 'tests', 'fixtures')
-                os.makedirs(fixtures_dir, exist_ok=True)
-                fixtures_output_path = os.path.join(fixtures_dir, output_filename)
-                import shutil
-                shutil.copy2(merged_file_path, fixtures_output_path)
-                logger.info(f"Development mode: Saved copy of merged file to {fixtures_output_path}")
-
+                # Ensure debug directory exists with absolute path
+                debug_dir = os.path.join(temp_dir, temp_manager.FILE_TYPE_DEBUG)
+                if not os.path.isabs(debug_dir):
+                    debug_dir = os.path.abspath(debug_dir)
+                os.makedirs(debug_dir, exist_ok=True)
+                logger.info(f"Ensuring debug directory exists: {debug_dir}")
+                
+                # Get session ID from headers or generate a new one
+                session_id = request.headers.get('X-Session-ID')
+                if not session_id:
+                    session_id = str(uuid.uuid4())
+                    logger.info(f"Generated new session ID: {session_id}")
+                else:
+                    logger.info(f"Using provided session ID: {session_id}")
+                
+                # Save the extracted data to a JSON file for debugging
+                debug_data_filename = f"debug_data_{session_id}.json"
+                debug_data_path = os.path.join(debug_dir, debug_data_filename)
+                try:
+                    with open(debug_data_path, 'w') as f:
+                        json.dump(extracted_data, f, indent=2, default=str)
+                    logger.info(f"Saved extracted data to: {debug_data_path}")
+                except Exception as e:
+                    logger.error(f"Failed to save debug data: {e}")
+                
+                # Use direct file copy instead of reading/writing through temp_manager
+                debug_output_filename = f"debug_{output_filename}"
+                debug_output_path = os.path.join(debug_dir, debug_output_filename)
+                
+                # Copy the file directly
+                try:
+                    # Verify source file exists
+                    if os.path.exists(merged_file_path):
+                        shutil.copy2(merged_file_path, debug_output_path)
+                        logger.info(f"Development mode: Saved copy of merged file to {debug_output_path}")
+                        
+                        # Verify the debug file was created
+                        if os.path.exists(debug_output_path):
+                            logger.debug(f"Debug file successfully created at: {debug_output_path}")
+                        else:
+                            logger.error(f"Failed to create debug file at: {debug_output_path}")
+                    else:
+                        logger.error(f"Cannot copy to debug: Source file does not exist at {merged_file_path}")
+                except Exception as e:
+                    logger.error(f"Failed to save debug copy: {e}")
+            
             # Clean up images after successful merge if configured
             if images:
                 excel_processor.cleanup_images(images, extraction_config.get('global_settings', {}))
 
             # Return the merged file
+            # Use the absolute path directly to avoid path resolution issues
+            logger.debug(f"Sending file with absolute path: {merged_file_path}")
             return send_file(
-                merged_file_path,
+                path_or_file=merged_file_path,  # Use the verified absolute path
                 as_attachment=True,
                 download_name=output_filename,
                 mimetype='application/vnd.openxmlformats-officedocument.presentationml.presentation'
             )
-
         finally:
             pptx_processor.close()
-
-    except ValidationError as e:
-        if temp_manager and temp_dir:
-            temp_manager.mark_error(temp_dir)
-        return jsonify(create_error_response(e, 400)[0]), 400
-
-    except (FileProcessingError, ConfigurationError) as e:
-        if temp_manager and temp_dir:
-            temp_manager.mark_error(temp_dir)
-        return jsonify(create_error_response(e, 422)[0]), 422
-
+    
     except Exception as e:
-        if temp_manager and temp_dir:
-            temp_manager.mark_error(temp_dir)
-        return jsonify(create_error_response(e, 500)[0]), 500
-
-    finally:
-        # Schedule cleanup
-        if temp_manager and temp_dir:
-            temp_manager.schedule_cleanup(temp_dir)
+        logger.exception(f"Error in merge endpoint: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/v1/preview', methods=['POST'])
@@ -643,14 +690,6 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
     if not app_config.get('development_mode', False):
         return None
 
-    # Create fixtures directory if it doesn't exist
-    fixtures_dir = os.path.join(os.getcwd(), 'tests', 'fixtures')
-    os.makedirs(fixtures_dir, exist_ok=True)
-
-    # Create images directory if it doesn't exist
-    images_dir = os.path.join(fixtures_dir, 'images')
-    os.makedirs(images_dir, exist_ok=True)
-
     # Create a deep copy of the extracted data to ensure we don't modify the original
     debug_data = copy.deepcopy(extracted_data)
 
@@ -663,10 +702,6 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
                 if os.path.exists(image_info['path']):
                     # Get image filename
                     image_filename = os.path.basename(image_info['path'])
-                    
-                    # Create reference to the image path
-                    # No need to copy the image as it's already in the right location
-                    # if we're using the development mode directory
                     
                     # Create simplified image reference for debug
                     image_ref = {
@@ -702,15 +737,26 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
         }
     }
     
-    # Save data to JSON file
-    debug_file_path = os.path.join(fixtures_dir, f"{base_filename}_debug_data.json")
-    with open(debug_file_path, 'w') as f:
-        json.dump(debug_data, f, indent=2, default=str)
+    # Get session ID from headers or generate a new one
+    session_id = request.headers.get('X-Session-ID')
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        logger.info(f"Generated new session ID: {session_id}")
+    else:
+        logger.info(f"Using provided session ID: {session_id}")
+    
+    # Save data to JSON file using the temp_manager with the DEBUG file type
+    temp_manager = TempFileManager()
+    debug_file_path = temp_manager.save_file_to_temp(
+        temp_dir, f"{session_id}_debug_data.json", 
+        json.dumps(debug_data, indent=2, default=str), 
+        temp_manager.FILE_TYPE_DEBUG
+    )
 
     logger.info(f"Development mode: Saved enhanced debug data to {debug_file_path}")
     if images:
         total_images = sum(len(sheet_images) for sheet_images in images.values())
-        logger.info(f"Development mode: Saved {total_images} extracted images to {images_dir}")
+        logger.info(f"Development mode: Saved {total_images} extracted images")
     
     return debug_file_path
 
@@ -776,6 +822,88 @@ def cli():
     setup_logging()
 
 
+@cli.command('merge')
+@click.option('--excel-file', '-e', required=True, type=click.Path(exists=True), help='Path to Excel file')
+@click.option('--pptx-file', '-p', required=True, type=click.Path(exists=True), help='Path to PowerPoint template')
+@click.option('--output-file', '-o', required=False, help='Output file name')
+@click.option('--config-file', '-c', required=False, type=click.Path(exists=True), help='Path to extraction configuration JSON file')
+@click.option('--debug-images/--no-debug-images', default=False, help='Save debug images')
+def merge_cli(excel_file, pptx_file, output_file=None, config_file=None, debug_images=False):
+    """Merge Excel data into PowerPoint template."""
+    try:
+        # Load extraction configuration if provided
+        extraction_config = {}
+        if config_file:
+            try:
+                with open(config_file, 'r') as f:
+                    extraction_config = json.load(f)
+            except json.JSONDecodeError as e:
+                click.echo(f"Error parsing config file: {e}", err=True)
+                return 1
+            except Exception as e:
+                click.echo(f"Error reading config file: {e}", err=True)
+                return 1
+        
+        # Initialize temp file manager
+        temp_file_config = extraction_config.get('global_settings', {}).get('temp_file_cleanup', {})
+        temp_manager = TempFileManager(temp_file_config)
+        
+        # Create a session directory
+        session_id = str(uuid.uuid4())
+        temp_dir = temp_manager.get_session_directory(session_id)
+        
+        # Process Excel file
+        excel_processor = ExcelProcessor(excel_file)
+        try:
+            # Extract data from Excel
+            try:
+                extracted_data = excel_processor.extract_data(
+                    extraction_config.get('global_settings', {}),
+                    extraction_config.get('sheet_configs', {})
+                )
+
+                # Extract images with enhanced position information
+                images = None
+                if extraction_config.get('global_settings', {}).get('image_extraction', {}).get('enabled', True):
+                    images = excel_processor.extract_images(temp_dir)
+                    
+                    # Log image extraction summary
+                    image_summary = excel_processor.get_image_summary(images)
+                    logger.info(f"Image extraction summary: {image_summary}")
+
+            except Exception as e:
+                logger.error(f"Failed to extract data from Excel: {e}")
+                click.echo(f"Error: Failed to extract data from Excel: {e}", err=True)
+                return 1
+        finally:
+            excel_processor.close()
+
+        # Process PowerPoint template
+        pptx_processor = PowerPointProcessor(pptx_file)
+        try:
+            # Set output file name if not provided
+            if not output_file:
+                output_file = f"merged_{os.path.basename(pptx_file)}"
+            
+            # Merge data into PowerPoint
+            merged_file_path = pptx_processor.merge_data(extracted_data, output_file, images)
+            
+            click.echo(f"Successfully merged data into PowerPoint template: {merged_file_path}")
+            return 0
+        finally:
+            pptx_processor.close()
+
+    except ValidationError as e:
+        click.echo(f"Error: {e}", err=True)
+        if debug_images:
+            # Save debug images if requested
+            click.echo("Saving debug images...")
+        return 1
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        return 1
+
+
 @cli.command()
 @click.option('--host', default='0.0.0.0', help='Host to bind to')
 @click.option('--port', default=5000, help='Port to bind to')
@@ -791,75 +919,6 @@ def serve(host: str, port: int, debug: bool) -> None:
         port=port,
         debug=debug or app_config.get('development_mode', False)
     )
-
-
-@cli.command()
-@click.argument('excel_file', type=click.Path(exists=True))
-@click.argument('pptx_file', type=click.Path(exists=True))
-@click.argument('output_file', type=click.Path())
-@click.option('--config', type=click.Path(exists=True), help='Configuration file path')
-@click.option('--debug-images', is_flag=True, help='Enable detailed image debugging')
-def merge(excel_file: str, pptx_file: str, output_file: str, config: Optional[str], debug_images: bool) -> None:
-    """Merge Excel data into PowerPoint template via CLI with enhanced image support."""
-    try:
-        setup_logging()
-
-        # Load configuration
-        if config:
-            with open(config, 'r') as f:
-                extraction_config = json.load(f)
-        else:
-            extraction_config = config_manager.get_default_config()
-
-        # Initialize temp file manager
-        temp_file_config = extraction_config.get('global_settings', {}).get('temp_file_cleanup', {})
-        temp_manager = TempFileManager(temp_file_config)
-
-        # Create temporary directory
-        with temp_manager.temp_directory() as temp_dir:
-            # Process Excel file
-            excel_processor = ExcelProcessor(excel_file)
-            try:
-                extracted_data = excel_processor.extract_data(
-                    extraction_config.get('sheet_configs', {})
-                )
-
-                # Extract images with enhanced position information
-                images = None
-                if extraction_config.get('global_settings', {}).get('image_extraction', {}).get('enabled', True):
-                    images = excel_processor.extract_images(temp_dir)
-                    
-                    # Log image extraction summary
-                    image_summary = excel_processor.get_image_summary(images)
-                    logger.info(f"Image extraction summary: {image_summary}")
-
-            finally:
-                excel_processor.close()
-
-            # Process PowerPoint template
-            pptx_processor = PowerPointProcessor(pptx_file)
-            try:
-                merged_file_path = pptx_processor.merge_data(extracted_data, output_file, images)
-                click.echo(f"Successfully merged files. Output saved to: {merged_file_path}")
-
-                if debug_images:
-                    # Show image matching analysis
-                    preview = pptx_processor.preview_merge(extracted_data, images)
-                    if 'image_mappings' in preview:
-                        click.echo("\n=== Image Mapping Analysis ===")
-                        for placeholder, image_path in preview['image_mappings'].items():
-                            status = "✓ Matched" if image_path else "✗ Not found"
-                            click.echo(f"  {placeholder}: {status}")
-                            if image_path:
-                                click.echo(f"    -> {os.path.basename(image_path)}")
-            finally:
-                pptx_processor.close()
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        if debug_images:
-            click.echo(f"Traceback: {traceback.format_exc()}", err=True)
-        raise click.Abort()
 
 
 if __name__ == '__main__':

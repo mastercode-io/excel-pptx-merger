@@ -4,15 +4,14 @@ import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
+from PIL import Image as PILImage
 from pptx import Presentation
 from pptx.shapes.base import BaseShape
-from pptx.text.text import TextFrame
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.shapes.picture import Picture
 from pptx.util import Inches
-from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.text.text import TextFrame
 import io
-from PIL import Image as PILImage
-
 from .utils.exceptions import PowerPointProcessingError, TemplateError, ValidationError
 from .utils.validation import validate_merge_fields
 
@@ -114,9 +113,27 @@ class PowerPointProcessor:
 
     def merge_data(self, data: Dict[str, Any], output_path: str,
                   images: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> str:
-        """Merge data into presentation template and save to output path."""
+        """Merge data into the PowerPoint template and save to output path.
+        
+        Args:
+            data: Data to merge into the template
+            output_path: Path to save the merged presentation
+            images: Dictionary of images by sheet name
+            
+        Returns:
+            Path to the merged presentation
+        """
         if not self.presentation:
-            self._validate_template()
+            raise PowerPointProcessingError("No presentation loaded")
+        
+        # Ensure output_path is an absolute path
+        if not os.path.isabs(output_path):
+            output_path = os.path.abspath(output_path)
+        
+        # Ensure output directory exists
+        output_dir = os.path.dirname(output_path)
+        os.makedirs(output_dir, exist_ok=True)
+        logger.debug(f"Ensuring PowerPoint output directory exists: {output_dir}")
 
         try:
             # Process each slide
@@ -195,9 +212,14 @@ class PowerPointProcessor:
                 if self._is_image_field(field, data):
                     image_path = self._get_image_for_field(field, data, images)
                     if image_path:
-                        # Replace the text shape with an image
-                        self._replace_shape_with_image(shape, image_path)
-                        return True
+                        # Verify the image file exists
+                        if os.path.exists(str(image_path)):
+                            # Replace the text shape with an image
+                            return self._replace_shape_with_image(shape, image_path)
+                        else:
+                            logger.warning(f"Image file does not exist at path: {image_path}")
+                            # Keep the original text if image insertion fails
+                            return False
 
             return False
 
@@ -284,7 +306,12 @@ class PowerPointProcessor:
             if image_path:
                 if is_image:
                     logger.debug(f"Found image path in data for field '{field_name}': {image_path}")
-                    return str(image_path)
+                    # Verify the image file exists
+                    if os.path.exists(str(image_path)):
+                        logger.debug(f"Image file exists at path: {image_path}")
+                        return str(image_path)
+                    else:
+                        logger.warning(f"Image file does not exist at path: {image_path}")
                 else:
                     logger.debug(f"Field '{field_name}' is not an image field, but has value: {image_path}")
                     # Not an image field, don't return the path
@@ -292,8 +319,24 @@ class PowerPointProcessor:
 
             # If field is an image but we didn't find a path, try position-based matching
             if is_image:
-                return self._find_image_by_field_name(field_name, images)
+                image_path = self._find_image_by_field_name(field_name, images)
+                if image_path:
+                    # Verify the image file exists
+                    if os.path.exists(str(image_path)):
+                        logger.debug(f"Found image by field name matching: {image_path}")
+                        return str(image_path)
+                    else:
+                        logger.warning(f"Image file from field name matching does not exist: {image_path}")
             
+            # Log if no image was found for an image field
+            if is_image:
+                logger.warning(f"No image found for image field: {field_name}")
+                # Debug log the available images
+                if images:
+                    logger.debug(f"Available images: {images}")
+                else:
+                    logger.warning("No images available")
+                    
             return None
 
         except Exception as e:
@@ -303,6 +346,18 @@ class PowerPointProcessor:
     def _find_image_by_field_name(self, field_name: str,
                                  images: Dict[str, List[Dict[str, Any]]]) -> Optional[str]:
         """Find image by field name using various matching strategies."""
+        if not images:
+            logger.warning("No images provided to _find_image_by_field_name")
+            return None
+            
+        logger.debug(f"Looking for image matching field: {field_name}")
+        
+        # Log available images for debugging
+        for sheet_name, sheet_images in images.items():
+            logger.debug(f"Sheet {sheet_name} has {len(sheet_images)} images")
+            for idx, img in enumerate(sheet_images):
+                logger.debug(f"  Image {idx}: {img.get('filename')} at {img.get('path')}")
+        
         field_lower = field_name.lower()
 
         # Strategy 1: Direct field name matching
@@ -314,6 +369,7 @@ class PowerPointProcessor:
                     if position.get('estimated_cell'):
                         cell_ref = position['estimated_cell'].lower()
                         if cell_ref in field_lower or field_lower.endswith(cell_ref):
+                            logger.info(f"Found image by position match: {image_info['path']}")
                             return image_info['path']
 
         # Strategy 2: Pattern matching for common image field patterns
@@ -333,6 +389,7 @@ class PowerPointProcessor:
                     # Find image by index across all sheets
                     for sheet_name, sheet_images in images.items():
                         if 0 <= index < len(sheet_images):
+                            logger.info(f"Found image by pattern match: {sheet_images[index]['path']}")
                             return sheet_images[index]['path']
                 except (ValueError, IndexError):
                     continue
@@ -342,100 +399,106 @@ class PowerPointProcessor:
         for keyword in keywords:
             if keyword in field_lower:
                 # Return first available image
-                for sheet_images in images.values():
+                for sheet_name, sheet_images in images.values():
                     if sheet_images:
+                        logger.info(f"Found image by keyword match: {sheet_images[0]['path']}")
                         return sheet_images[0]['path']
 
+        # Strategy 4: Just use the first available image if all else fails
+        for sheet_name, sheet_images in images.items():
+            if sheet_images:
+                logger.info(f"No specific match found, using first available image: {sheet_images[0]['path']}")
+                return sheet_images[0]['path']
+                
+        logger.warning(f"No image found for field: {field_name}")
         return None
 
-    def _replace_shape_with_image(self, shape: BaseShape, image_path: str) -> None:
-        """Replace a text shape with an image while maintaining aspect ratio."""
-        try:
-            # Get the slide that contains this shape
-            slide = None
-            parent = shape.part
-            if hasattr(parent, 'slide') and parent.slide:
-                slide = parent.slide
+    def _replace_shape_with_image(self, shape, image_path: str) -> bool:
+        """Replace a shape with an image while maintaining position and size.
+        
+        Args:
+            shape: The shape to replace
+            image_path: Path to the image file
             
-            if not slide:
-                logger.error("Could not find slide for shape")
-                return
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Verify the image file exists
+            if not os.path.exists(image_path):
+                logger.error(f"Image file does not exist: {image_path}")
+                return False
                 
-            # Get shape position and size
+            # Ensure image_path is absolute
+            if not os.path.isabs(image_path):
+                image_path = os.path.abspath(image_path)
+                
+            # Get the parent slide
+            slide = shape.part.slide
+            
+            # Get the shape dimensions and position
             left = shape.left
             top = shape.top
             width = shape.width
             height = shape.height
             
-            # Store shape index before removing
-            shape_idx = None
-            try:
-                shape_idx = slide.shapes._spTree.index(shape._element)
-            except (ValueError, AttributeError):
-                pass
-                
             # Remove the original shape
-            try:
-                shape_element = shape._element
-                shape_element.getparent().remove(shape_element)
-            except Exception as e:
-                logger.warning(f"Error removing shape: {e}")
+            shape_id = shape.shape_id
+            sp_tree = slide.shapes._spTree
+            for idx, sp in enumerate(sp_tree.findall('.//{*}sp')):
+                if sp.get('id') == str(shape_id):
+                    sp_tree.remove(sp)
+                    break
             
-            # Add the image at the same position, maintaining aspect ratio
+            # Add the image while maintaining aspect ratio
             try:
-                # Get original image dimensions to calculate aspect ratio
-                from PIL import Image
-                try:
-                    with Image.open(image_path) as img:
-                        img_width, img_height = img.size
-                        img_aspect_ratio = img_width / img_height
-                        
-                        # Calculate new dimensions to fit within the shape while maintaining aspect ratio
-                        shape_aspect_ratio = width / height
-                        
-                        if img_aspect_ratio > shape_aspect_ratio:
-                            # Image is wider than the shape (relative to height)
-                            # Use full width and adjust height
-                            new_width = width
-                            new_height = width / img_aspect_ratio
-                            # Center vertically
-                            new_top = top + (height - new_height) / 2
-                            new_left = left
-                        else:
-                            # Image is taller than the shape (relative to width)
-                            # Use full height and adjust width
-                            new_height = height
-                            new_width = height * img_aspect_ratio
-                            # Center horizontally
-                            new_left = left + (width - new_width) / 2
-                            new_top = top
-                        
-                        logger.info(f"Adding image with aspect ratio preserved: original={img_aspect_ratio}, " +
-                                   f"new dimensions: {new_width}x{new_height}")
-                        slide.shapes.add_picture(image_path, new_left, new_top, new_width, new_height)
-                        logger.info(f"Successfully added image: {image_path}")
-                except Exception as img_e:
-                    logger.warning(f"Could not determine image dimensions, using placeholder size: {img_e}")
-                    # Fall back to using the placeholder size if we can't get the image dimensions
-                    slide.shapes.add_picture(image_path, left, top, width, height)
-                    logger.info(f"Added image with placeholder dimensions: {image_path}")
+                # Get image dimensions
+                with PILImage.open(image_path) as img:
+                    img_width, img_height = img.size
+                
+                # Calculate aspect ratios
+                shape_ratio = width / height
+                img_ratio = img_width / img_height
+                
+                # Adjust dimensions to maintain aspect ratio
+                if img_ratio > shape_ratio:
+                    # Image is wider than shape
+                    new_width = width
+                    new_height = width / img_ratio
+                    new_top = top + (height - new_height) / 2
+                    new_left = left
+                else:
+                    # Image is taller than shape
+                    new_height = height
+                    new_width = height * img_ratio
+                    new_left = left + (width - new_width) / 2
+                    new_top = top
+                
+                # Add the image to the slide
+                slide.shapes.add_picture(
+                    image_path,
+                    new_left,
+                    new_top,
+                    new_width,
+                    new_height
+                )
+                
+                logger.info(f"Successfully replaced shape with image: {image_path}")
+                return True
+                
             except Exception as e:
-                logger.error(f"Failed to add image: {e}")
-                # Try alternative method if the first one fails
-                try:
-                    from pptx.util import Inches
-                    # Convert EMU to inches as a fallback
-                    left_inches = Inches(left / 914400)
-                    top_inches = Inches(top / 914400)
-                    width_inches = Inches(width / 914400)
-                    height_inches = Inches(height / 914400)
-                    slide.shapes.add_picture(image_path, left_inches, top_inches, width_inches, height_inches)
-                    logger.info(f"Successfully added image using alternative method: {image_path}")
-                except Exception as alt_e:
-                    logger.error(f"Alternative method also failed: {alt_e}")
+                logger.error(f"Error adding image to slide: {e}")
+                
+                # Add a text box with error message as fallback
+                tb = slide.shapes.add_textbox(left, top, width, height)
+                tf = tb.text_frame
+                tf.text = f"Image Error: {os.path.basename(image_path)}"
+                
+                return False
                 
         except Exception as e:
-            logger.error(f"Failed to replace shape with image: {e}")
+            logger.error(f"Error replacing shape with image: {e}")
+            return False
 
     def _process_paragraph(self, paragraph, data: Dict[str, Any]) -> None:
         """Process a single paragraph for merge field replacement."""
@@ -606,23 +669,27 @@ class PowerPointProcessor:
             image_path = self._get_image_for_field(image_field, data, images)
 
             if image_path:
-                try:
-                    # Get shape position and size
-                    left = shape.left
-                    top = shape.top
-                    width = shape.width
-                    height = shape.height
+                # Verify the image file exists
+                if os.path.exists(str(image_path)):
+                    try:
+                        # Get shape position and size
+                        left = shape.left
+                        top = shape.top
+                        width = shape.width
+                        height = shape.height
 
-                    # Remove the placeholder shape
-                    slide.shapes._spTree.remove(shape._element)
+                        # Remove the placeholder shape
+                        slide.shapes._spTree.remove(shape._element)
 
-                    # Add the image
-                    slide.shapes.add_picture(image_path, left, top, width, height)
-                    logger.debug(f"Replaced image placeholder with: {image_path}")
-                except Exception as img_error:
-                    logger.warning(f"Failed to add image '{image_path}': {img_error}")
-                    # Keep the original placeholder if image insertion fails
-                    pass
+                        # Add the image
+                        slide.shapes.add_picture(image_path, left, top, width, height)
+                        logger.debug(f"Replaced image placeholder with: {image_path}")
+                    except Exception as img_error:
+                        logger.warning(f"Failed to add image '{image_path}': {img_error}")
+                        # Keep the original placeholder if image insertion fails
+                        pass
+                else:
+                    logger.warning(f"Image file does not exist at path: {image_path}")
 
         except Exception as e:
             logger.warning(f"Failed to replace image placeholder: {e}")

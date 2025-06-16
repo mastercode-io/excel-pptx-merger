@@ -1,6 +1,6 @@
 steps:
   # Install dependencies
-  - name: 'python:3.9'
+  - name: 'python:3.12'
     entrypoint: pip
     args: ['install', '-r', 'requirements.txt', '--user']
 
@@ -12,7 +12,7 @@ steps:
       - 'deploy'
       - 'excel-pptx-merger'
       - '--gen2'
-      - '--runtime=python39'
+      - '--runtime=python312'
       - '--region=${_REGION}'
       - '--source=.'
       - '--entry-point=excel_pptx_merger'
@@ -23,8 +23,8 @@ steps:
       - '--set-env-vars=STORAGE_BACKEND=GCS,GCS_BUCKET_NAME=${_BUCKET_NAME},GCS_BASE_PREFIX=${_BASE_PREFIX},API_KEY=${_API_KEY}'
 
 substitutions:
-  _REGION: us-central1
-  _BUCKET_NAME: excel-pptx-merger-storage
+  _REGION: europe-west2
+  _BUCKET_NAME: excel-pptx-merger-storage-uk
   _BASE_PREFIX: temp
   _API_KEY: changeme-in-production
 

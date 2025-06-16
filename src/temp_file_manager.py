@@ -6,7 +6,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Any, Union, BinaryIO
+from typing import Dict, List, Optional, Any, Union, BinaryIO, Literal
 import logging
 import atexit
 from datetime import datetime, timedelta
@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 class TempFileManager:
     """Manages temporary files and directories with configurable cleanup policies and storage backends."""
+    
+    # File type constants
+    FILE_TYPE_INPUT = 'input'
+    FILE_TYPE_OUTPUT = 'output'
+    FILE_TYPE_IMAGE = 'image'
+    FILE_TYPE_DEBUG = 'debug'
     
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         """Initialize temporary file manager with configuration."""
@@ -73,15 +79,44 @@ class TempFileManager:
     
     def create_temp_directory(self, prefix: str = "excel_pptx_merger_", 
                             cleanup_delay: Optional[int] = None,
-                            keep_on_error: Optional[bool] = None) -> str:
-        """Create a temporary directory with configured cleanup policy."""
+                            keep_on_error: Optional[bool] = None,
+                            session_id: Optional[str] = None) -> str:
+        """Create a temporary directory with configured cleanup policy.
+        
+        Args:
+            prefix: Prefix for the directory name
+            cleanup_delay: Optional override for cleanup delay in seconds
+            keep_on_error: Optional override for keep_on_error policy
+            session_id: Optional session ID to use instead of generating a new one
+            
+        Returns:
+            Path to the created temporary directory (absolute path)
+        """
         try:
-            # Generate a unique directory path
-            dir_id = str(uuid.uuid4())
+            # Use provided session ID or generate a unique one
+            dir_id = session_id if session_id else str(uuid.uuid4())
             temp_dir = f"{prefix}{dir_id}"
             
-            # Create the directory in the storage backend
-            storage_path = self.storage.create_directory(temp_dir)
+            # Get the absolute path for the storage backend
+            if hasattr(self.storage, 'base_directory'):
+                base_path = self.storage.base_directory
+                # Ensure base_path is absolute
+                if not os.path.isabs(base_path):
+                    base_path = os.path.abspath(base_path)
+                
+                # Create the full path
+                full_temp_dir = os.path.join(base_path, temp_dir)
+                logger.info(f"Creating temporary directory at: {full_temp_dir}")
+                
+                # Create the directory structure
+                os.makedirs(full_temp_dir, exist_ok=True)
+                
+                # Initialize standard folder structure
+                self.storage.initialize_folder_structure(temp_dir)
+            else:
+                # Use storage backend to create directory if no base_directory attribute
+                storage_path = self.storage.create_directory(temp_dir)
+                full_temp_dir = storage_path  # Assume storage_path is already absolute
             
             # Store directory info for cleanup
             with self._lock:
@@ -92,23 +127,26 @@ class TempFileManager:
                     'error_occurred': False,
                     'manual_cleanup': False,
                     'cleanup_scheduled': False,
-                    'storage_path': storage_path
                 }
             
-            logger.debug(f"Created temporary directory: {temp_dir}")
-            return temp_dir
-        
+            # Return the absolute path to the temp directory
+            if hasattr(self.storage, '_get_full_path'):
+                return self.storage._get_full_path(temp_dir)
+            else:
+                return full_temp_dir
+            
         except Exception as e:
             raise TempFileError(f"Failed to create temporary directory: {e}")
     
     @contextmanager
     def temp_directory(self, prefix: str = "excel_pptx_merger_",
                       cleanup_delay: Optional[int] = None,
-                      keep_on_error: Optional[bool] = None):
+                      keep_on_error: Optional[bool] = None,
+                      session_id: Optional[str] = None):
         """Context manager for temporary directory with automatic cleanup."""
         temp_dir = None
         try:
-            temp_dir = self.create_temp_directory(prefix, cleanup_delay, keep_on_error)
+            temp_dir = self.create_temp_directory(prefix, cleanup_delay, keep_on_error, session_id)
             yield temp_dir
         except Exception as e:
             if temp_dir:
@@ -230,7 +268,6 @@ class TempFileManager:
                     'keep_on_error': info['keep_on_error'],
                     'error_occurred': info['error_occurred'],
                     'cleanup_scheduled': info['cleanup_scheduled'],
-                    'storage_path': info.get('storage_path', '')
                 }
                 for temp_dir, info in self._temp_directories.items()
             ]
@@ -325,13 +362,40 @@ class TempFileManager:
         except Exception as e:
             raise TempFileError(f"Failed to create temporary file: {e}")
     
-    def save_file_to_temp(self, temp_dir: str, filename: str, file_obj) -> str:
-        """Save uploaded file to temporary directory."""
-        try:
-            if temp_dir not in self._temp_directories:
-                raise TempFileError(f"Directory not managed by TempFileManager: {temp_dir}")
+    def save_file_to_temp(self, temp_dir: str, filename: str, file_obj: Union[BinaryIO, str, bytes], 
+                         file_type: str = FILE_TYPE_INPUT) -> str:
+        """Save a file to the temporary directory.
+        
+        Args:
+            temp_dir: Base temporary directory path
+            filename: Name of the file to save
+            file_obj: File object or content to save
+            file_type: Type of file (input, output, image, debug)
             
-            file_path = f"{temp_dir}/{filename}"
+        Returns:
+            Absolute path to the saved file
+        """
+        try:
+            # Ensure temp_dir is absolute
+            if not os.path.isabs(temp_dir):
+                temp_dir = os.path.abspath(temp_dir)
+                logger.debug(f"Converted temp_dir to absolute path: {temp_dir}")
+            
+            # Determine the appropriate path based on file type
+            if file_type == self.FILE_TYPE_INPUT:
+                file_path = self.storage.get_input_path(temp_dir, filename)
+            elif file_type == self.FILE_TYPE_OUTPUT:
+                file_path = self.storage.get_output_path(temp_dir, filename)
+            elif file_type == self.FILE_TYPE_IMAGE:
+                file_path = self.storage.get_image_path(temp_dir, filename)
+            elif file_type == self.FILE_TYPE_DEBUG:
+                file_path = self.storage.get_debug_path(temp_dir, filename)
+            else:
+                # Default to input folder if type is unknown
+                file_path = self.storage.get_input_path(temp_dir, filename)
+            
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
             
             # Save to storage backend
             if hasattr(file_obj, 'read'):
@@ -339,19 +403,47 @@ class TempFileManager:
             else:
                 storage_path = self.storage.save_file(file_path, file_obj)
             
-            logger.debug(f"Saved file to temporary directory: {file_path}")
-            # Return the full storage path instead of the relative path
-            return storage_path
+            # Get the absolute path for the file using the storage backend
+            if hasattr(self.storage, '_get_full_path'):
+                absolute_path = self.storage._get_full_path(storage_path)
+                logger.debug(f"Saved {file_type} file to temporary directory: {absolute_path}")
+                return absolute_path  # Return the absolute path instead of the relative path
+            else:
+                # If storage backend doesn't have _get_full_path, ensure the path is absolute
+                if not os.path.isabs(storage_path):
+                    absolute_path = os.path.abspath(storage_path)
+                    logger.debug(f"Saved {file_type} file to temporary directory: {absolute_path}")
+                    return absolute_path
+                else:
+                    logger.debug(f"Saved {file_type} file to temporary directory: {storage_path}")
+                    return storage_path
         
         except Exception as e:
             raise TempFileError(f"Failed to save file to temporary directory: {e}")
     
-    def get_file_content(self, file_path: str) -> bytes:
-        """Get content of a file from storage."""
+    def get_file_content(self, file_path: str, mode: str = 'rb') -> Union[bytes, str]:
+        """Get the content of a file from the temporary directory.
+        
+        Args:
+            file_path: Path to the file
+            mode: File opening mode ('rb' for binary, 'r' for text)
+            
+        Returns:
+            File content as bytes or string
+        """
         try:
-            return self.storage.read_file(file_path)
+            # Check if file_path already includes the base directory
+            if self.storage.base_directory and file_path.startswith(self.storage.base_directory):
+                logger.debug(f"File path already includes base directory: {file_path}")
+                # Read directly from the file system
+                with open(file_path, mode) as f:
+                    return f.read()
+            
+            # Otherwise, use the storage backend
+            return self.storage.get_file_content(file_path, mode)
+            
         except Exception as e:
-            raise TempFileError(f"Failed to read file content: {e}")
+            raise TempFileError(f"Failed to get file content: {e}")
     
     def get_public_url(self, file_path: str, expiration_seconds: int = 3600) -> Optional[str]:
         """Get a public URL for accessing the file."""
@@ -360,6 +452,34 @@ class TempFileManager:
         except Exception as e:
             logger.error(f"Failed to get public URL for {file_path}: {e}")
             return None
+    
+    def get_session_directory(self, session_id: str) -> str:
+        """Get or create a session directory for the given session ID.
+        
+        Args:
+            session_id: Session ID to use for the directory
+            
+        Returns:
+            Absolute path to the session directory
+        """
+        prefix = "excel_pptx_merger_"
+        temp_dir = f"{prefix}{session_id}"
+        
+        # Check if directory already exists
+        if hasattr(self.storage, 'base_directory'):
+            base_path = self.storage.base_directory
+            # Ensure base_path is absolute
+            if not os.path.isabs(base_path):
+                base_path = os.path.abspath(base_path)
+            
+            full_temp_dir = os.path.join(base_path, temp_dir)
+            
+            if os.path.exists(full_temp_dir):
+                logger.debug(f"Using existing session directory: {full_temp_dir}")
+                return full_temp_dir
+        
+        # Create new directory if it doesn't exist
+        return self.create_temp_directory(prefix=prefix, session_id=session_id)
     
     def __del__(self) -> None:
         """Cleanup on object destruction."""

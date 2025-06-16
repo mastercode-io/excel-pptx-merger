@@ -157,6 +157,7 @@ Thumbs.db
 temp/
 tmp/
 logs/
+.temp/
 *.xlsx
 *.pptx
 *.tmp

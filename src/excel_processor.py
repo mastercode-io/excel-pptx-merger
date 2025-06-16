@@ -2,16 +2,19 @@
 
 import logging
 import os
+import io
+import uuid
 import re
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, BinaryIO
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.drawing.image import Image
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker
 from openpyxl.utils import get_column_letter, column_index_from_string
 from PIL import Image as PILImage
-import io
 
+from .temp_file_manager import TempFileManager
 from .utils.exceptions import ExcelProcessingError, ValidationError
 from .utils.validation import normalize_column_name, validate_cell_range, is_empty_cell_value
 
@@ -46,11 +49,22 @@ class ExcelProcessor:
             self._validate_file()
         return list(self.workbook.sheetnames)
 
-    def extract_data(self, sheet_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract data from Excel sheet according to configuration."""
+    def extract_data(self, global_settings: Dict[str, Any], sheet_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract data from Excel sheet according to configuration.
+        
+        Args:
+            global_settings: Global settings for extraction
+            sheet_config: Configuration for each sheet
+            
+        Returns:
+            Dictionary of extracted data
+        """
         try:
             extracted_data = {}
-
+            
+            # Store global settings for use in other methods
+            self._global_settings = global_settings
+            
             for sheet_name, config in sheet_config.items():
                 logger.info(f"Processing sheet: {sheet_name}")
 
@@ -339,100 +353,112 @@ class ExcelProcessor:
         except Exception as e:
             raise ExcelProcessingError(f"Failed to extract table data: {e}")
 
-    def extract_images(self, config: Dict[str, Any] = None) -> Dict[str, List[Dict[str, Any]]]:
-        """Extract images from Excel file with enhanced position information.
+    def extract_images(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Extract images from Excel file and save them to the temp directory.
         
-        Args:
-            config: Configuration dictionary with image storage settings
-            
         Returns:
-            Dictionary of extracted images by sheet name
+            Dictionary mapping sheet names to lists of image metadata.
+            Each image metadata includes path, filename, sheet, index, format, position.
         """
-        if not self.workbook:
-            self._validate_file()
-            
-        # Get app configuration to determine environment
-        from .config_manager import ConfigManager
-        config_manager = ConfigManager()
-        app_config = config_manager.get_app_config()
-        development_mode = app_config.get('development_mode', False)
+        logger.info(f"Extracting images from Excel file: {self.file_path}")
         
-        # Determine output directory based on environment
-        if config is None:
-            config = {}
-            
-        if development_mode:
-            output_directory = config.get('image_storage', {}).get('development_mode', {}).get('directory', 'tests/fixtures/images')
+        # Get the session directory from the file path
+        # The Excel file should be in a subdirectory of the session directory
+        # e.g., /.temp/excel_pptx_merger_<session_id>/input/file.xlsx
+        file_dir = os.path.dirname(self.file_path)
+        if 'input' in file_dir:
+            # Go up one level to get the session directory
+            session_dir = os.path.dirname(file_dir)
         else:
-            output_directory = config.get('image_storage', {}).get('production_mode', {}).get('directory', 'temp')
-        
-        # Convert relative path to absolute if needed
-        if not os.path.isabs(output_directory):
-            output_directory = os.path.join(os.getcwd(), output_directory)
+            # If not in an input directory, use the directory containing the file
+            session_dir = file_dir
             
-        # Ensure output directory exists
-        os.makedirs(output_directory, exist_ok=True)
+        logger.info(f"Using session directory for images: {session_dir}")
         
-        logger.info(f"Extracting images to: {output_directory}")
-
-        images = {}
-
-        try:
-            for sheet_name in self.workbook.sheetnames:
-                worksheet = self.workbook[sheet_name]
-                sheet_images = []
-
-                # Extract images from worksheet
-                if hasattr(worksheet, '_images') and worksheet._images:
-                    for idx, img in enumerate(worksheet._images):
-                        try:
-                            # Get image data (corrected method)
-                            image_data = img._data()
-
-                            # Convert to PIL Image to get format and size
-                            image_stream = io.BytesIO(image_data)
-                            pil_image = PILImage.open(image_stream)
-                            format_lower = pil_image.format.lower() if pil_image.format else 'png'
-
-                            # Generate normalized filename
-                            filename = self._normalize_image_filename(sheet_name, idx + 1, format_lower)
-                            filepath = os.path.join(output_directory, filename)
-
-                            # Extract position information
-                            position_info = self._extract_image_position(img, worksheet)
-
-                            # Save image
-                            with open(filepath, 'wb') as f:
-                                f.write(image_data)
-
-                            # Create simplified image info with single path
-                            image_info = {
-                                'path': filepath,
-                                'filename': filename,
-                                'index': idx + 1,
-                                'sheet': sheet_name,
-                                'position': position_info,
-                                'size': {
-                                    'width': pil_image.width,
-                                    'height': pil_image.height
-                                },
-                                'format': format_lower
-                            }
-
-                            sheet_images.append(image_info)
-                            logger.debug(f"Extracted image with position: {filepath}")
-
-                        except Exception as e:
-                            logger.warning(f"Failed to extract image {idx} from {sheet_name}: {e}")
-                            continue
-
-                if sheet_images:
-                    images[sheet_name] = sheet_images
-
-            return images
-
-        except Exception as e:
-            raise ExcelProcessingError(f"Failed to extract images: {e}")
+        # Initialize the temp file manager
+        temp_manager = TempFileManager()
+        
+        # Initialize result dictionary
+        result = {}
+        
+        # Process each worksheet
+        for sheet_name in self.workbook.sheetnames:
+            sheet = self.workbook[sheet_name]
+            
+            # Skip hidden sheets
+            if sheet.sheet_state == 'hidden':
+                logger.debug(f"Skipping hidden sheet: {sheet_name}")
+                continue
+                
+            # Initialize list for this sheet's images
+            result[sheet_name] = []
+            
+            # Check if sheet has images
+            if not hasattr(sheet, '_images'):
+                logger.debug(f"Sheet {sheet_name} has no images")
+                continue
+                
+            logger.info(f"Processing {len(sheet._images)} images in sheet: {sheet_name}")
+            
+            # Process each image in the sheet
+            for idx, image in enumerate(sheet._images):
+                try:
+                    # Get image data
+                    image_data = image._data()
+                    if not image_data:
+                        logger.warning(f"No data for image {idx} in sheet {sheet_name}")
+                        continue
+                    
+                    # Determine image format
+                    img_format = self._detect_image_format(image_data)
+                    if not img_format:
+                        logger.warning(f"Could not detect format for image {idx} in sheet {sheet_name}")
+                        img_format = 'png'  # Default to PNG
+                    
+                    # Generate a unique filename
+                    image_filename = f"image_{sheet_name}_{idx}.{img_format}"
+                    
+                    # Save the image using the temp file manager
+                    image_path = temp_manager.save_file_to_temp(
+                        session_dir,
+                        image_filename,
+                        image_data,
+                        temp_manager.FILE_TYPE_IMAGE
+                    )
+                    
+                    # Verify the image was saved
+                    if not os.path.exists(image_path):
+                        logger.error(f"Failed to save image {idx} from sheet {sheet_name}")
+                        continue
+                    
+                    # Extract position information
+                    position = self._extract_image_position(image)
+                    
+                    # Store image metadata
+                    image_meta = {
+                        'path': image_path,
+                        'filename': image_filename,
+                        'sheet': sheet_name,
+                        'index': idx,
+                        'format': img_format,
+                        'position': position
+                    }
+                    
+                    # Add to results
+                    result[sheet_name].append(image_meta)
+                    logger.debug(f"Extracted image: {image_meta['path']}")
+                    
+                except Exception as e:
+                    logger.error(f"Error extracting image {idx} from sheet {sheet_name}: {e}")
+                    logger.exception("Image extraction error details")
+            
+            logger.info(f"Extracted {len(result[sheet_name])} images from sheet {sheet_name}")
+        
+        # Log summary
+        total_images = sum(len(images) for images in result.values())
+        logger.info(f"Total images extracted: {total_images}")
+        
+        return result
 
     def _normalize_image_filename(self, sheet_name: str, idx: int, format_name: str) -> str:
         """Normalize image filename for consistency and reliability."""
@@ -443,7 +469,7 @@ class ExcelProcessor:
         # Create normalized filename
         return f"{normalized_sheet}_image_{idx}.{format_lower}"
 
-    def _extract_image_position(self, img, worksheet: Worksheet) -> Dict[str, Any]:
+    def _extract_image_position(self, img) -> Dict[str, Any]:
         """Extract position information from image object."""
         position_info = {
             'anchor_type': None,
@@ -769,3 +795,25 @@ class ExcelProcessor:
         if self.workbook:
             self.workbook.close()
             self.workbook = None
+
+    def _detect_image_format(self, image_data: bytes) -> str:
+        """Detect image format from binary data.
+        
+        Args:
+            image_data: Binary image data
+            
+        Returns:
+            Image format as a string (e.g., 'png', 'jpg')
+        """
+        try:
+            # Use PIL to detect the image format
+            with io.BytesIO(image_data) as image_stream:
+                pil_image = PILImage.open(image_stream)
+                if pil_image.format:
+                    return pil_image.format.lower()
+                else:
+                    logger.warning("Could not detect image format, defaulting to png")
+                    return 'png'
+        except Exception as e:
+            logger.error(f"Error detecting image format: {e}")
+            return 'png'  # Default to PNG
