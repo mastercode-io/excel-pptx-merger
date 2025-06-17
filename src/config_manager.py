@@ -366,6 +366,7 @@ class ConfigManager:
             'max_file_size_mb': self._get_env_int('MAX_FILE_SIZE_MB', 50),
             'allowed_extensions': self._get_env_list('ALLOWED_EXTENSIONS', ['xlsx', 'pptx']),
             'temp_directory': self._get_env_str('TEMP_DIRECTORY', '/tmp'),
+            'save_files': self._get_env_bool('SAVE_FILES', False),
             'flask_config': {
                 'host': self._get_env_str('FLASK_HOST', '0.0.0.0'),
                 'port': self._get_env_int('FLASK_PORT', 5000),

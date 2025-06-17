@@ -5,6 +5,7 @@ import os
 import io
 import uuid
 import re
+import base64
 from typing import Any, Dict, List, Optional, Tuple, Union, BinaryIO
 import pandas as pd
 from openpyxl import load_workbook
@@ -24,12 +25,19 @@ logger = logging.getLogger(__name__)
 class ExcelProcessor:
     """Processes Excel files and extracts data according to configuration."""
 
-    def __init__(self, file_path: str) -> None:
-        """Initialize Excel processor with file path."""
-        self.file_path = file_path
+    def __init__(self, file_input: Union[str, BinaryIO]) -> None:
+        """Initialize Excel processor with file path or file-like object."""
+        self.file_input = file_input
+        self.file_path = None
         self.workbook = None
         self.data_frame = None
-        self._validate_file()
+        self._is_memory_file = not isinstance(file_input, str)
+        
+        if self._is_memory_file:
+            self._load_from_memory()
+        else:
+            self.file_path = file_input
+            self._validate_file()
 
     def _validate_file(self) -> None:
         """Validate Excel file exists and is readable."""
@@ -42,6 +50,19 @@ class ExcelProcessor:
             logger.info(f"Successfully loaded Excel file: {self.file_path}")
         except Exception as e:
             raise ExcelProcessingError(f"Invalid Excel file format: {e}")
+
+    def _load_from_memory(self) -> None:
+        """Load Excel file from memory (file-like object)."""
+        try:
+            # Ensure the file pointer is at the beginning
+            if hasattr(self.file_input, 'seek'):
+                self.file_input.seek(0)
+            
+            # Load workbook from file-like object
+            self.workbook = load_workbook(self.file_input, data_only=True)
+            logger.info("Successfully loaded Excel file from memory")
+        except Exception as e:
+            raise ExcelProcessingError(f"Invalid Excel file format from memory: {e}")
 
     def get_sheet_names(self) -> List[str]:
         """Get list of sheet names in the workbook."""
@@ -353,30 +374,40 @@ class ExcelProcessor:
         except Exception as e:
             raise ExcelProcessingError(f"Failed to extract table data: {e}")
 
-    def extract_images(self) -> Dict[str, List[Dict[str, Any]]]:
-        """Extract images from Excel file and save them to the temp directory.
+    def extract_images(self, session_dir: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+        """Extract images from Excel file and optionally save them to disk.
+        
+        Args:
+            session_dir: Optional session directory for saving images. If None and 
+                        SAVE_FILES=False, images will only be encoded as base64.
         
         Returns:
             Dictionary mapping sheet names to lists of image metadata.
-            Each image metadata includes path, filename, sheet, index, format, position.
+            Each image metadata includes format, position, base64 encoding, and 
+            optionally path/filename if saved to disk.
         """
-        logger.info(f"Extracting images from Excel file: {self.file_path}")
+        # Get app configuration to check SAVE_FILES setting
+        from .config_manager import ConfigManager
+        config_manager = ConfigManager()
+        app_config = config_manager.get_app_config()
+        save_files = app_config.get('save_files', False)
         
-        # Get the session directory from the file path
-        # The Excel file should be in a subdirectory of the session directory
-        # e.g., /.temp/excel_pptx_merger_<session_id>/input/file.xlsx
-        file_dir = os.path.dirname(self.file_path)
-        if 'input' in file_dir:
-            # Go up one level to get the session directory
-            session_dir = os.path.dirname(file_dir)
-        else:
-            # If not in an input directory, use the directory containing the file
-            session_dir = file_dir
-            
-        logger.info(f"Using session directory for images: {session_dir}")
+        logger.info(f"Extracting images from Excel file - save_files: {save_files}")
         
-        # Initialize the temp file manager
-        temp_manager = TempFileManager()
+        # Initialize temp file manager if we need to save files
+        temp_manager = None
+        if save_files and session_dir:
+            temp_manager = TempFileManager()
+            logger.info(f"Using session directory for images: {session_dir}")
+        elif save_files and self.file_path:
+            # Fallback to file path directory if available
+            file_dir = os.path.dirname(self.file_path)
+            if 'input' in file_dir:
+                session_dir = os.path.dirname(file_dir)
+            else:
+                session_dir = file_dir
+            temp_manager = TempFileManager()
+            logger.info(f"Using inferred session directory for images: {session_dir}")
         
         # Initialize result dictionary
         result = {}
@@ -418,35 +449,48 @@ class ExcelProcessor:
                     # Generate a unique filename
                     image_filename = f"image_{sheet_name}_{idx}.{img_format}"
                     
-                    # Save the image using the temp file manager
-                    image_path = temp_manager.save_file_to_temp(
-                        session_dir,
-                        image_filename,
-                        image_data,
-                        temp_manager.FILE_TYPE_IMAGE
-                    )
-                    
-                    # Verify the image was saved
-                    if not os.path.exists(image_path):
-                        logger.error(f"Failed to save image {idx} from sheet {sheet_name}")
-                        continue
-                    
                     # Extract position information
                     position = self._extract_image_position(image)
                     
-                    # Store image metadata
+                    # Encode image as base64
+                    image_base64 = self._encode_image_as_base64(image_data, img_format)
+                    
+                    # Initialize image metadata
                     image_meta = {
-                        'path': image_path,
                         'filename': image_filename,
                         'sheet': sheet_name,
                         'index': idx,
                         'format': img_format,
-                        'position': position
+                        'position': position,
+                        'image_base64': image_base64
                     }
+                    
+                    # Conditionally save image to disk
+                    if save_files and temp_manager and session_dir:
+                        try:
+                            image_path = temp_manager.save_file_to_temp(
+                                session_dir,
+                                image_filename,
+                                image_data,
+                                temp_manager.FILE_TYPE_IMAGE
+                            )
+                            
+                            # Verify the image was saved
+                            if os.path.exists(image_path):
+                                image_meta['path'] = image_path
+                                logger.debug(f"Saved image to disk: {image_path}")
+                            else:
+                                logger.warning(f"Failed to save image {idx} from sheet {sheet_name}")
+                        except Exception as e:
+                            logger.warning(f"Error saving image to disk: {e}")
+                    else:
+                        # Not saving files, only using base64
+                        logger.debug(f"Image {idx} from sheet {sheet_name} processed in-memory only")
                     
                     # Add to results
                     result[sheet_name].append(image_meta)
-                    logger.debug(f"Extracted image: {image_meta['path']}")
+                    log_msg = f"Extracted image: {image_meta.get('path', 'in-memory only')}"
+                    logger.debug(log_msg)
                     
                 except Exception as e:
                     logger.error(f"Error extracting image {idx} from sheet {sheet_name}: {e}")
@@ -459,89 +503,6 @@ class ExcelProcessor:
         logger.info(f"Total images extracted: {total_images}")
         
         return result
-
-    def _normalize_image_filename(self, sheet_name: str, idx: int, format_name: str) -> str:
-        """Normalize image filename for consistency and reliability."""
-        # Normalize sheet name: lowercase, replace spaces with underscores, remove special chars
-        normalized_sheet = re.sub(r'[^\w_]', '', sheet_name.lower().replace(' ', '_'))
-        # Ensure format is lowercase and without leading dot
-        format_lower = format_name.lower().lstrip('.')
-        # Create normalized filename
-        return f"{normalized_sheet}_image_{idx}.{format_lower}"
-
-    def _extract_image_position(self, img) -> Dict[str, Any]:
-        """Extract position information from image object."""
-        position_info = {
-            'anchor_type': None,
-            'from_cell': None,
-            'to_cell': None,
-            'coordinates': None,
-            'estimated_cell': None,
-            'size_info': None
-        }
-
-        try:
-            if hasattr(img, 'anchor'):
-                anchor = img.anchor
-                position_info['anchor_type'] = type(anchor).__name__
-
-                # Two-cell anchor (most common)
-                if hasattr(anchor, '_from') and hasattr(anchor, 'to'):
-                    from_info = anchor._from
-                    to_info = anchor.to
-
-                    # Convert to Excel cell references
-                    from_col = get_column_letter(from_info.col + 1)
-                    from_cell = f"{from_col}{from_info.row + 1}"
-                    to_col = get_column_letter(to_info.col + 1)
-                    to_cell = f"{to_col}{to_info.row + 1}"
-
-                    position_info.update({
-                        'from_cell': from_cell,
-                        'to_cell': to_cell,
-                        'coordinates': {
-                            'from': {'col': from_info.col, 'row': from_info.row},
-                            'to': {'col': to_info.col, 'row': to_info.row}
-                        }
-                    })
-
-                    # Use from_cell as the primary estimated position
-                    position_info['estimated_cell'] = from_cell
-
-                    # Calculate span information
-                    col_span = to_info.col - from_info.col + 1
-                    row_span = to_info.row - from_info.row + 1
-                    position_info['size_info'] = {
-                        'column_span': col_span,
-                        'row_span': row_span
-                    }
-
-                # One-cell anchor
-                elif hasattr(anchor, '_from'):
-                    from_info = anchor._from
-                    from_col = get_column_letter(from_info.col + 1)
-                    from_cell = f"{from_col}{from_info.row + 1}"
-
-                    position_info.update({
-                        'from_cell': from_cell,
-                        'estimated_cell': from_cell,
-                        'coordinates': {
-                            'from': {'col': from_info.col, 'row': from_info.row}
-                        }
-                    })
-
-                    position_info['size_info'] = {
-                        'column_span': 1,
-                        'row_span': 1
-                    }
-
-        except Exception as e:
-            logger.debug(f"Could not extract detailed position info: {e}")
-            # Fallback to basic position estimation
-            position_info['estimated_cell'] = 'A1'  # Default fallback
-            position_info['size_info'] = {'column_span': 1, 'row_span': 1}
-
-        return position_info
 
     def get_image_by_position(self, images: Dict[str, List[Dict[str, Any]]],
                              target_cell: str, sheet_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -727,15 +688,18 @@ class ExcelProcessor:
                 for img in sheet_images:
                     if 'position' in img and 'coordinates' in img['position']:
                         row_num = img['position']['coordinates']['from']['row']
-                        # Use the single path
-                        image_path = img['path']
                         
-                        # Verify the path exists
-                        if os.path.exists(image_path):
-                            row_to_image[row_num] = image_path
-                            logger.debug(f"Mapped image at row {row_num} to path {image_path}")
-                        else:
-                            logger.warning(f"Image path does not exist: {image_path}")
+                        # Always include base64 data in the image reference
+                        image_data = {
+                            'base64': img['image_base64'],  # Always include base64 data
+                        }
+                        
+                        # Include path if it exists (for debugging/logging)
+                        if 'path' in img and os.path.exists(img['path']):
+                            image_data['path'] = img['path']
+                        
+                        row_to_image[row_num] = image_data
+                        logger.debug(f"Mapped image at row {row_num} to data with base64 content")
                 
                 # Sort images by row number
                 sorted_rows = sorted(row_to_image.keys())
@@ -817,3 +781,125 @@ class ExcelProcessor:
         except Exception as e:
             logger.error(f"Error detecting image format: {e}")
             return 'png'  # Default to PNG
+
+    def _encode_image_as_base64(self, image_data: bytes, img_format: str) -> str:
+        """Encode image data as base64 string with proper MIME type.
+        
+        Args:
+            image_data: Binary image data
+            img_format: Image format (e.g., 'png', 'jpeg')
+            
+        Returns:
+            Base64 encoded string with data URI prefix
+        """
+        try:
+            # Normalize format for MIME type
+            mime_format = img_format.lower()
+            if mime_format == 'jpg':
+                mime_format = 'jpeg'
+                
+            # Define MIME type mapping
+            mime_types = {
+                'png': 'image/png',
+                'jpeg': 'image/jpeg',
+                'gif': 'image/gif',
+                'webp': 'image/webp',
+                'bmp': 'image/bmp',
+                'tiff': 'image/tiff'
+            }
+            
+            mime_type = mime_types.get(mime_format, 'image/png')
+            
+            # Encode to base64
+            base64_encoded = base64.b64encode(image_data).decode('utf-8')
+            
+            # Return data URI
+            return f"data:{mime_type};base64,{base64_encoded}"
+            
+        except Exception as e:
+            logger.error(f"Error encoding image as base64: {e}")
+            # Return empty data URI as fallback
+            return "data:image/png;base64,"
+
+    def _normalize_image_filename(self, sheet_name: str, idx: int, format_name: str) -> str:
+        """Normalize image filename for consistency and reliability."""
+        # Normalize sheet name: lowercase, replace spaces with underscores, remove special chars
+        normalized_sheet = re.sub(r'[^\w_]', '', sheet_name.lower().replace(' ', '_'))
+        # Ensure format is lowercase and without leading dot
+        format_lower = format_name.lower().lstrip('.')
+        # Create normalized filename
+        return f"{normalized_sheet}_image_{idx}.{format_lower}"
+
+    def _extract_image_position(self, img) -> Dict[str, Any]:
+        """Extract position information from image object."""
+        position_info = {
+            'anchor_type': None,
+            'from_cell': None,
+            'to_cell': None,
+            'coordinates': None,
+            'estimated_cell': None,
+            'size_info': None
+        }
+
+        try:
+            if hasattr(img, 'anchor'):
+                anchor = img.anchor
+                position_info['anchor_type'] = type(anchor).__name__
+
+                # Two-cell anchor (most common)
+                if hasattr(anchor, '_from') and hasattr(anchor, 'to'):
+                    from_info = anchor._from
+                    to_info = anchor.to
+
+                    # Convert to Excel cell references
+                    from_col = get_column_letter(from_info.col + 1)
+                    from_cell = f"{from_col}{from_info.row + 1}"
+                    to_col = get_column_letter(to_info.col + 1)
+                    to_cell = f"{to_col}{to_info.row + 1}"
+
+                    position_info.update({
+                        'from_cell': from_cell,
+                        'to_cell': to_cell,
+                        'coordinates': {
+                            'from': {'col': from_info.col, 'row': from_info.row},
+                            'to': {'col': to_info.col, 'row': to_info.row}
+                        }
+                    })
+
+                    # Use from_cell as the primary estimated position
+                    position_info['estimated_cell'] = from_cell
+
+                    # Calculate span information
+                    col_span = to_info.col - from_info.col + 1
+                    row_span = to_info.row - from_info.row + 1
+                    position_info['size_info'] = {
+                        'column_span': col_span,
+                        'row_span': row_span
+                    }
+
+                # One-cell anchor
+                elif hasattr(anchor, '_from'):
+                    from_info = anchor._from
+                    from_col = get_column_letter(from_info.col + 1)
+                    from_cell = f"{from_col}{from_info.row + 1}"
+
+                    position_info.update({
+                        'from_cell': from_cell,
+                        'estimated_cell': from_cell,
+                        'coordinates': {
+                            'from': {'col': from_info.col, 'row': from_info.row}
+                        }
+                    })
+
+                    position_info['size_info'] = {
+                        'column_span': 1,
+                        'row_span': 1
+                    }
+
+        except Exception as e:
+            logger.debug(f"Could not extract detailed position info: {e}")
+            # Fallback to basic position estimation
+            position_info['estimated_cell'] = 'A1'  # Default fallback
+            position_info['size_info'] = {'column_span': 1, 'row_span': 1}
+
+        return position_info

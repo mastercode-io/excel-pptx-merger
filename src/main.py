@@ -187,27 +187,41 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         else:
             logger.info(f"Using provided session ID: {session_id}")
         
-        # Create temp file manager
-        temp_manager = TempFileManager()
+        # Check if we should save files
+        save_files = app_config.get('save_files', False)
+        logger.info(f"File saving mode: {'enabled' if save_files else 'disabled (memory-only)'}")
         
-        # Get or create session directory
-        temp_dir = temp_manager.get_session_directory(session_id)
-        logger.info(f"Using session directory: {temp_dir}")
+        temp_manager = None
+        temp_dir = None
+        excel_path = None
+        pptx_path = None
         
-        # Save uploaded files to temp directory
-        excel_path = temp_manager.save_file_to_temp(
-            temp_dir, excel_file.filename, excel_file, 
-            temp_manager.FILE_TYPE_INPUT
-        )
-        pptx_path = temp_manager.save_file_to_temp(
-            temp_dir, pptx_file.filename, pptx_file,
-            temp_manager.FILE_TYPE_INPUT
-        )
-        
-        logger.info(f"Saved input files to: {excel_path}, {pptx_path}")
+        if save_files:
+            # Traditional file-based processing
+            temp_manager = TempFileManager()
+            temp_dir = temp_manager.get_session_directory(session_id)
+            logger.info(f"Using session directory: {temp_dir}")
+            
+            # Save uploaded files to temp directory
+            excel_path = temp_manager.save_file_to_temp(
+                temp_dir, excel_file.filename, excel_file, 
+                temp_manager.FILE_TYPE_INPUT
+            )
+            pptx_path = temp_manager.save_file_to_temp(
+                temp_dir, pptx_file.filename, pptx_file,
+                temp_manager.FILE_TYPE_INPUT
+            )
+            
+            logger.info(f"Saved input files to: {excel_path}, {pptx_path}")
+        else:
+            # Memory-only processing
+            logger.info("Processing files in memory without saving to disk")
         
         # Process Excel file
-        excel_processor = ExcelProcessor(excel_path)
+        if save_files:
+            excel_processor = ExcelProcessor(excel_path)
+        else:
+            excel_processor = ExcelProcessor(excel_file)
         
         try:
             try:
@@ -223,7 +237,10 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             
             # Extract images from Excel file
             logger.info("Extracting images from Excel file")
-            images = excel_processor.extract_images()
+            if save_files:
+                images = excel_processor.extract_images(temp_dir)
+            else:
+                images = excel_processor.extract_images()
             
             # Log the number of images extracted
             image_count = sum(len(sheet_images) for sheet_images in images.values())
@@ -252,18 +269,31 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             excel_processor.close()
         
         # Process PowerPoint file
-        pptx_processor = PowerPointProcessor(pptx_path)
+        if save_files:
+            pptx_processor = PowerPointProcessor(pptx_path)
+        else:
+            pptx_processor = PowerPointProcessor(pptx_file)
+            
         try:
             output_filename = f"merged_{os.path.basename(pptx_file.filename)}"
             
-            # Get the output path using the storage backend
-            merged_file_path = temp_manager.storage.get_output_path(temp_dir, output_filename)
-            
-            # Ensure output directory exists
-            os.makedirs(os.path.dirname(merged_file_path), exist_ok=True)
-            
-            # Merge data into PowerPoint and save
-            merged_file_path = pptx_processor.merge_data(extracted_data, merged_file_path, images)
+            if save_files:
+                # File-based processing: save to disk
+                merged_file_path = temp_manager.storage.get_output_path(temp_dir, output_filename)
+                
+                # Ensure output directory exists
+                os.makedirs(os.path.dirname(merged_file_path), exist_ok=True)
+                
+                # Merge data into PowerPoint and save
+                merged_file_path = pptx_processor.merge_data(extracted_data, merged_file_path, images)
+            else:
+                # Memory-based processing: create in-memory file
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.pptx', delete=False) as tmp_file:
+                    merged_file_path = tmp_file.name
+                
+                # Merge data into PowerPoint and save to temporary file
+                merged_file_path = pptx_processor.merge_data(extracted_data, merged_file_path, images)
             
             # Verify the merged file exists and ensure it's an absolute path
             if not os.path.isabs(merged_file_path):
@@ -275,22 +305,14 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             else:
                 logger.debug(f"Verified merged file exists at: {merged_file_path}")
 
-            # In development mode, also save a copy to the debug folder
-            if app_config.get('development_mode', False):
+            # In development mode, also save a copy to the debug folder (only if saving files)
+            if app_config.get('development_mode', False) and save_files and temp_dir:
                 # Ensure debug directory exists with absolute path
                 debug_dir = os.path.join(temp_dir, temp_manager.FILE_TYPE_DEBUG)
                 if not os.path.isabs(debug_dir):
                     debug_dir = os.path.abspath(debug_dir)
                 os.makedirs(debug_dir, exist_ok=True)
                 logger.info(f"Ensuring debug directory exists: {debug_dir}")
-                
-                # Get session ID from headers or generate a new one
-                session_id = request.headers.get('X-Session-ID')
-                if not session_id:
-                    session_id = str(uuid.uuid4())
-                    logger.info(f"Generated new session ID: {session_id}")
-                else:
-                    logger.info(f"Using provided session ID: {session_id}")
                 
                 # Save the extracted data to a JSON file for debugging
                 debug_data_filename = f"debug_data_{session_id}.json"
@@ -322,6 +344,8 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                         logger.error(f"Cannot copy to debug: Source file does not exist at {merged_file_path}")
                 except Exception as e:
                     logger.error(f"Failed to save debug copy: {e}")
+            elif app_config.get('development_mode', False) and not save_files:
+                logger.info("Development mode: Debug file saving skipped (memory-only mode)")
             
             # Clean up images after successful merge if configured
             if images:
@@ -330,12 +354,31 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             # Return the merged file
             # Use the absolute path directly to avoid path resolution issues
             logger.debug(f"Sending file with absolute path: {merged_file_path}")
-            return send_file(
+            
+            def cleanup_temp_file():
+                """Cleanup temporary file after response is sent (for memory-only mode)."""
+                if not save_files and merged_file_path and os.path.exists(merged_file_path):
+                    try:
+                        os.unlink(merged_file_path)
+                        logger.debug(f"Cleaned up temporary file: {merged_file_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to cleanup temporary file: {e}")
+            
+            response = send_file(
                 path_or_file=merged_file_path,  # Use the verified absolute path
                 as_attachment=True,
                 download_name=output_filename,
                 mimetype='application/vnd.openxmlformats-officedocument.presentationml.presentation'
             )
+            
+            # Schedule cleanup for memory-only mode
+            if not save_files:
+                import threading
+                cleanup_thread = threading.Thread(target=cleanup_temp_file)
+                cleanup_thread.daemon = True
+                cleanup_thread.start()
+            
+            return response
         finally:
             pptx_processor.close()
     
@@ -699,21 +742,21 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
         for sheet_name, sheet_images in images.items():
             sheet_image_refs = []
             for image_info in sheet_images:
-                if os.path.exists(image_info['path']):
-                    # Get image filename
-                    image_filename = os.path.basename(image_info['path'])
-                    
-                    # Create simplified image reference for debug
-                    image_ref = {
-                        'path': image_info['path'],
-                        'filename': image_info['filename'],
-                        'index': image_info['index'],
-                        'sheet': image_info['sheet'],
-                        'position': image_info['position'],
-                        'size': image_info['size'],
-                        'format': image_info['format']
-                    }
-                    sheet_image_refs.append(image_ref)
+                # Create simplified image reference for debug that includes both path and base64
+                image_ref = {
+                    'filename': image_info['filename'],
+                    'index': image_info['index'],
+                    'sheet': image_info['sheet'],
+                    'position': image_info['position'],
+                    'format': image_info['format'],
+                    'image_base64': image_info['image_base64']  # Always include base64 data
+                }
+                
+                # Include path if available (for debugging/logging)
+                if 'path' in image_info and os.path.exists(image_info['path']):
+                    image_ref['path'] = image_info['path']
+                
+                sheet_image_refs.append(image_ref)
 
             if sheet_image_refs:
                 image_refs[sheet_name] = sheet_image_refs
@@ -733,7 +776,8 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
             'image_position_extraction': True,
             'position_based_matching': True,
             'format_detection': True,
-            'simplified_image_paths': True
+            'simplified_image_paths': True,
+            'base64_embedding': True  # Add flag for base64 embedding
         }
     }
     
@@ -756,7 +800,7 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
     logger.info(f"Development mode: Saved enhanced debug data to {debug_file_path}")
     if images:
         total_images = sum(len(sheet_images) for sheet_images in images.values())
-        logger.info(f"Development mode: Saved {total_images} extracted images")
+        logger.info(f"Development mode: Saved {total_images} extracted images with base64 data")
     
     return debug_file_path
 
