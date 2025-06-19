@@ -22,7 +22,9 @@ from src.config_manager import ConfigManager
 @click.option('--env', default='development', help='Environment (development, testing, production)')
 @click.option('--reload', is_flag=True, help='Enable auto-reload on file changes')
 @click.option('--log-level', default='INFO', help='Log level (DEBUG, INFO, WARNING, ERROR)')
-def run_server(host, port, debug, env, reload, log_level):
+@click.option('--storage', default=None, type=click.Choice(['LOCAL', 'GCS']), 
+              help='Storage backend to use (LOCAL or GCS). Overrides .env setting.')
+def run_server(host, port, debug, env, reload, log_level, storage):
     """Run the Excel to PowerPoint Merger Flask server locally."""
     
     # Set environment
@@ -30,6 +32,10 @@ def run_server(host, port, debug, env, reload, log_level):
     os.environ['DEVELOPMENT_MODE'] = str(debug).lower()
     os.environ['LOG_LEVEL'] = log_level.upper()
     
+    # Override storage backend if specified
+    if storage:
+        os.environ['STORAGE_BACKEND'] = storage
+        
     # Setup logging
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -44,6 +50,7 @@ def run_server(host, port, debug, env, reload, log_level):
     logger.info(f"Host: {host}")
     logger.info(f"Port: {port}")
     logger.info(f"Log level: {log_level}")
+    logger.info(f"Storage backend: {os.environ.get('STORAGE_BACKEND', 'From .env file')}")
     
     # Configure Flask app
     app.config.update({
