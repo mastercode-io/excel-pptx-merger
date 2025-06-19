@@ -729,7 +729,21 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
         # Get auto-detect setting
         auto_detect = request.form.get('auto_detect', 'true').lower() == 'true'
         
-        logger.info(f"Extracting data from sheet '{sheet_name}' with auto_detect={auto_detect}")
+        # Get max_rows parameter (optional)
+        max_rows = None
+        if 'max_rows' in request.form:
+            try:
+                max_rows = int(request.form.get('max_rows'))
+                if max_rows <= 0:
+                    return create_error_response(
+                        ValidationError("max_rows must be a positive integer"), 400
+                    )
+            except ValueError:
+                return create_error_response(
+                    ValidationError("max_rows must be a valid integer"), 400
+                )
+        
+        logger.info(f"Extracting data from sheet '{sheet_name}' with auto_detect={auto_detect}, max_rows={max_rows}")
         
         # Process Excel file (use existing memory/file handling logic)
         excel_processor = ExcelProcessor(excel_file)
@@ -738,7 +752,8 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
             extracted_data = excel_processor.extract_single_sheet(
                 sheet_name=sheet_name,
                 config=config,
-                auto_detect=auto_detect
+                auto_detect=auto_detect,
+                max_rows=max_rows
             )
             
             # Calculate processing time
@@ -751,6 +766,7 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
                 'extracted_data': extracted_data['data'],
                 'metadata': {
                     'total_rows': extracted_data['metadata']['total_rows'],
+                    'extracted_rows': extracted_data['metadata']['extracted_rows'],
                     'total_columns': extracted_data['metadata']['total_columns'],
                     'extraction_method': extracted_data['metadata']['method'],
                     'data_types_detected': extracted_data['metadata']['types'],
@@ -909,31 +925,65 @@ def excel_pptx_merger(request):
         )
         return error_response, status_code
     
-    # Handle merge request
+    # Route request to the appropriate endpoint based on path
     if request.method == 'POST':
         try:
-            # Extract files from request
+            # Extract endpoint - only requires excel_file
+            if request.path == '/api/v1/extract':
+                return extract_data_endpoint()
+                
+            # Check if files were uploaded for other endpoints
             if not request.files:
                 # Cloud Functions might receive files differently
                 return jsonify(create_error_response(
                     ValidationError("No files were uploaded"), 400
                 )[0]), 400
                 
-            if 'excel_file' not in request.files or 'pptx_file' not in request.files:
+            # Merge and Preview endpoints - require both excel_file and pptx_file
+            if request.path in ['/api/v1/merge', '/api/v1/preview']:
+                if 'excel_file' not in request.files or 'pptx_file' not in request.files:
+                    return jsonify(create_error_response(
+                        ValidationError("Both 'excel_file' and 'pptx_file' are required"), 400
+                    )[0]), 400
+                
+                # Process the request using the appropriate endpoint handler
+                if request.path == '/api/v1/merge':
+                    return merge_files()
+                elif request.path == '/api/v1/preview':
+                    return preview_merge()
+            
+            # Config endpoint
+            elif request.path == '/api/v1/config':
+                return manage_config()
+                
+            # Stats endpoint
+            elif request.path == '/api/v1/stats':
+                return get_stats()
+                
+            # Unknown endpoint
+            else:
                 return jsonify(create_error_response(
-                    ValidationError("Both 'excel_file' and 'pptx_file' are required"), 400
-                )[0]), 400
-            
-            # Process the merge request using the Flask app's merge_files function
-            return merge_files()
-            
+                    ValidationError(f"Unknown endpoint: {request.path}"), 404
+                )[0]), 404
+                
         except Exception as e:
             logger.exception("Error processing Cloud Function request")
             return jsonify(create_error_response(e, 500)[0]), 500
+    elif request.method == 'GET':
+        # Handle GET requests for config and stats
+        if request.path == '/api/v1/config':
+            return manage_config()
+        elif request.path == '/api/v1/stats':
+            return get_stats()
+        else:
+            return jsonify(create_error_response(
+                ValidationError(f"GET method not supported for endpoint: {request.path}"), 405
+            )[0]), 405
     else:
         return jsonify(create_error_response(
-            ValidationError("Only POST method is supported"), 405
+            ValidationError("Only POST and GET methods are supported"), 405
         )[0]), 405
+
 
 # CLI interface
 @click.group()

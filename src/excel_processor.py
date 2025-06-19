@@ -713,13 +713,14 @@ class ExcelProcessor:
         return result
 
     def extract_single_sheet(self, sheet_name: str, config: Optional[Dict] = None, 
-                            auto_detect: bool = True) -> Dict[str, Any]:
+                             auto_detect: bool = True, max_rows: Optional[int] = None) -> Dict[str, Any]:
         """Extract data from a single specified sheet with auto-detection support.
         
         Args:
             sheet_name: Name of the Excel sheet to process
             config: Optional extraction configuration
             auto_detect: Whether to auto-detect structure when no config provided
+            max_rows: Optional maximum number of rows to extract
             
         Returns:
             Dictionary containing extracted data and metadata
@@ -736,7 +737,9 @@ class ExcelProcessor:
         # Create or use provided configuration
         if config is None and auto_detect:
             logger.info(f"Auto-detecting structure for sheet: {sheet_name}")
-            detection_config = self._auto_detect_sheet_structure(worksheet)
+            # If max_rows is None, we want to scan all rows
+            scan_all_rows = max_rows is None
+            detection_config = self._auto_detect_sheet_structure(worksheet, scan_all_rows=scan_all_rows)
             extraction_method = "auto_detect"
         elif config:
             detection_config = config
@@ -744,154 +747,120 @@ class ExcelProcessor:
         else:
             raise ValidationError("Either provide a config or enable auto_detect")
         
+        # Apply max_rows limit to configuration if specified
+        # If max_rows is None, ensure we extract all rows
+        if max_rows is not None:
+            self._apply_max_rows_to_config(detection_config, max_rows)
+            logger.info(f"Applied max_rows limit of {max_rows} to extraction configuration")
+        else:
+            # Ensure we extract all rows when max_rows is not specified
+            self._apply_extract_all_rows(detection_config, worksheet.max_row)
+            logger.info(f"Configured to extract all rows (up to {worksheet.max_row})")
+        
         # Extract data using the configuration
         sheet_config = {sheet_name: detection_config}
         extracted_data = self.extract_data({}, sheet_config)
         
+        # Extract images from the sheet
+        session_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'temp')
+        os.makedirs(session_dir, exist_ok=True)
+        images = self.extract_images(session_dir)
+        
+        # Link images to extracted data
+        if images and sheet_name in images:
+            normalized_sheet_name = normalize_column_name(sheet_name)
+            sheet_data = extracted_data.get(normalized_sheet_name, {})
+            
+            # Find all subtables in the extracted data
+            for subtable_name, subtable_data in sheet_data.items():
+                if isinstance(subtable_data, list) and subtable_data:
+                    # This is a table-like structure, link images to rows
+                    self._link_images_to_rows(subtable_data, images[sheet_name])
+        
         # Get sheet metadata
-        metadata = self._get_sheet_metadata(worksheet, detection_config, extraction_method)
+        metadata = self._get_sheet_metadata(
+            worksheet, 
+            detection_config, 
+            extraction_method,
+            extracted_data.get(normalize_column_name(sheet_name), {})
+        )
         
         return {
             'data': extracted_data.get(normalize_column_name(sheet_name), {}),
             'metadata': metadata
         }
-
-    def _auto_detect_sheet_structure(self, worksheet: Worksheet) -> Dict[str, Any]:
-        """Auto-detect data structure in worksheet."""
         
-        # Scan worksheet to find data patterns
-        data_regions = self._scan_data_regions(worksheet)
-        
-        subtables = []
-        for region in data_regions:
-            subtable_config = self._create_subtable_config(worksheet, region)
-            if subtable_config:
-                subtables.append(subtable_config)
-        
-        return {"subtables": subtables}
-
-    def _scan_data_regions(self, worksheet: Worksheet, max_scan_rows: int = 100) -> List[Dict]:
-        """Scan worksheet to identify distinct data regions."""
-        regions = []
-        used_rows = set()  # Track rows already part of a region
-        
-        # Simple algorithm: look for header-like patterns
-        for row in range(1, min(max_scan_rows, worksheet.max_row + 1)):
-            # Skip if this row is already part of another region
-            if row in used_rows:
-                continue
-                
-            # Check if this row looks like headers
-            row_cells = [worksheet.cell(row=row, column=col).value 
-                        for col in range(1, min(20, worksheet.max_column + 1))]
+    def _apply_max_rows_to_config(self, config: Dict[str, Any], max_rows: int) -> None:
+        """Apply max_rows limit to all subtables in the configuration."""
+        if 'subtables' not in config:
+            return
             
-            # Filter non-empty cells
-            non_empty = [cell for cell in row_cells if cell is not None]
+        for subtable in config['subtables']:
+            if 'data_extraction' in subtable:
+                # Only apply to table type subtables (not key_value_pairs)
+                if subtable.get('type', 'table') == 'table':
+                    subtable['data_extraction']['max_rows'] = max_rows
+    
+    def _apply_extract_all_rows(self, config: Dict[str, Any], max_sheet_rows: int) -> None:
+        """Configure extraction to include all rows in the sheet."""
+        if 'subtables' not in config:
+            return
             
-            if len(non_empty) >= 2:  # Potential header row
-                # Analyze the pattern below this row
-                region_info = self._analyze_region_below(worksheet, row, len(non_empty))
-                if region_info and region_info['rows'] > 0:
-                    regions.append({
-                        'header_row': row,
-                        'header_col': 1,
-                        'type': region_info['type'],
-                        'rows': region_info['rows'],
-                        'cols': region_info['cols']
-                    })
+        for subtable in config['subtables']:
+            if 'data_extraction' in subtable:
+                # Only apply to table type subtables (not key_value_pairs)
+                if subtable.get('type', 'table') == 'table':
+                    # Set max_rows to the maximum number of rows in the sheet
+                    # Add a buffer to ensure we get everything
+                    subtable['data_extraction']['max_rows'] = max_sheet_rows + 10
+    
+    def _link_images_to_rows(self, rows: List[Dict[str, Any]], images: List[Dict[str, Any]]) -> None:
+        """Link images to data rows based on position information."""
+        if not images or not rows:
+            return
+            
+        # Create a mapping of row numbers to images
+        row_to_image = {}
+        for img in images:
+            if 'position' in img and 'coordinates' in img['position']:
+                row_num = img['position']['coordinates']['from']['row']
+                row_to_image[row_num] = {
+                    'base64': img['image_base64']
+                }
+                if 'path' in img:
+                    row_to_image[row_num]['path'] = img['path']
+        
+        # Sort images by row number
+        sorted_rows = sorted(row_to_image.keys())
+        
+        # Assign images to data rows where appropriate
+        # This is a simple heuristic - we assume images are in order with data rows
+        for i, row_data in enumerate(rows):
+            if i < len(sorted_rows):
+                # Check if there's an image field in the row
+                for field, value in row_data.items():
+                    # Look for image fields (either by field type or by field name)
+                    is_image_field = False
                     
-                    # Mark rows as used to avoid overlapping regions
-                    for r in range(row, row + region_info['rows'] + 1):
-                        used_rows.add(r)
-        
-        # Prioritize larger regions and tables over key-value pairs
-        regions.sort(key=lambda x: (x['type'] == 'table', x['rows'] * x['cols']), reverse=True)
-        
-        # Return only the best region to avoid confusion
-        return regions[:1] if regions else []
-
-    def _analyze_region_below(self, worksheet: Worksheet, header_row: int, 
-                             header_cols: int) -> Optional[Dict]:
-        """Analyze data pattern below a potential header row."""
-        
-        # Look at next few rows to determine pattern
-        data_rows = 0
-        consistent_structure = True
-        
-        for row in range(header_row + 1, min(header_row + 10, worksheet.max_row + 1)):
-            row_data = [worksheet.cell(row=row, column=col).value 
-                       for col in range(1, header_cols + 1)]
-            
-            non_empty_count = sum(1 for cell in row_data if cell is not None)
-            
-            if non_empty_count == 0:
-                break  # End of data
-            
-            data_rows += 1
-            
-            # Check if structure is consistent with table format
-            if non_empty_count < header_cols * 0.3:  # Less than 30% filled
-                consistent_structure = False
-        
-        if data_rows >= 1:
-            return {
-                'type': 'table' if consistent_structure and data_rows > 1 else 'key_value_pairs',
-                'rows': data_rows,
-                'cols': header_cols
-            }
-        
-        return None
-
-    def _create_subtable_config(self, worksheet: Worksheet, region: Dict) -> Optional[Dict]:
-        """Create subtable configuration based on detected region."""
-        
-        header_row = region['header_row']
-        header_col = region['header_col']
-        
-        # Get headers
-        headers = []
-        for col in range(header_col, header_col + region['cols']):
-            cell_value = worksheet.cell(row=header_row, column=col).value
-            if cell_value:
-                headers.append(str(cell_value).strip())
-        
-        if not headers:
-            return None
-        
-        # Create column mappings
-        column_mappings = {}
-        for header in headers:
-            column_mappings[header] = normalize_column_name(header)
-        
-        # Determine search text for this region
-        search_text = headers[0] if headers else "Data"
-        
-        config = {
-            "name": f"auto_detected_{region['type']}_{header_row}",
-            "type": region['type'],
-            "header_search": {
-                "method": "contains_text",
-                "text": search_text,
-                "column": "A",
-                "search_range": f"A{max(1, header_row-2)}:A{header_row+2}"
-            },
-            "data_extraction": {
-                "headers_row_offset": 0,
-                "data_row_offset": 1,
-                "max_columns": region['cols'],
-                "max_rows": region['rows'] + 10,  # Add buffer
-                "column_mappings": column_mappings
-            }
-        }
-        
-        # Add orientation for key-value pairs
-        if region['type'] == 'key_value_pairs':
-            config['data_extraction']['orientation'] = 'horizontal'
-        
-        return config
-
+                    # Check field types metadata if available
+                    if '_field_types' in row_data and field in row_data['_field_types']:
+                        is_image_field = row_data['_field_types'][field] == 'image'
+                    
+                    # Also check by common image field names
+                    if not is_image_field and field.lower() in ('image', 'logo', 'picture', 'photo'):
+                        is_image_field = True
+                    
+                    if is_image_field:
+                        # This is an image field, assign the image data
+                        row_data[field] = row_to_image[sorted_rows[i]]
+                        break
+                
+                # If no explicit image field was found but we have an image, add it to an 'image' field
+                if 'image' not in row_data:
+                    row_data['image'] = row_to_image[sorted_rows[i]]
+    
     def _get_sheet_metadata(self, worksheet: Worksheet, config: Dict, 
-                           method: str) -> Dict[str, Any]:
+                           method: str, extracted_data: Dict[str, Any]) -> Dict[str, Any]:
         """Get metadata about the processed sheet."""
         
         types_detected = []
@@ -900,8 +869,15 @@ class ExcelProcessor:
             if subtable_type not in types_detected:
                 types_detected.append(subtable_type)
         
+        # Count extracted rows
+        extracted_rows = 0
+        for subtable_name, subtable_data in extracted_data.items():
+            if isinstance(subtable_data, list):
+                extracted_rows += len(subtable_data)
+        
         return {
             'total_rows': worksheet.max_row,
+            'extracted_rows': extracted_rows,
             'total_columns': worksheet.max_column,
             'method': method,
             'types': types_detected,
@@ -1099,3 +1075,173 @@ class ExcelProcessor:
             position_info['size_info'] = {'column_span': 1, 'row_span': 1}
 
         return position_info
+
+    def _auto_detect_sheet_structure(self, worksheet: Worksheet, scan_all_rows: bool = False) -> Dict[str, Any]:
+        """Auto-detect data structure in worksheet.
+        
+        Args:
+            worksheet: The worksheet to analyze
+            scan_all_rows: If True, scan all rows in the worksheet instead of limiting
+        """
+        
+        # Scan worksheet to find data patterns
+        data_regions = self._scan_data_regions(worksheet, scan_all_rows=scan_all_rows)
+        
+        subtables = []
+        for region in data_regions:
+            subtable_config = self._create_subtable_config(worksheet, region, scan_all_rows=scan_all_rows)
+            if subtable_config:
+                subtables.append(subtable_config)
+        
+        return {"subtables": subtables}
+
+    def _scan_data_regions(self, worksheet: Worksheet, max_scan_rows: int = 100, scan_all_rows: bool = False) -> List[Dict]:
+        """Scan worksheet to identify distinct data regions.
+        
+        Args:
+            worksheet: The worksheet to analyze
+            max_scan_rows: Maximum number of rows to scan if scan_all_rows is False
+            scan_all_rows: If True, scan all rows in the worksheet
+        """
+        regions = []
+        used_rows = set()  # Track rows already part of a region
+        
+        # Determine how many rows to scan
+        rows_to_scan = worksheet.max_row if scan_all_rows else min(max_scan_rows, worksheet.max_row)
+        
+        # Simple algorithm: look for header-like patterns
+        for row in range(1, rows_to_scan + 1):
+            # Skip if this row is already part of another region
+            if row in used_rows:
+                continue
+                
+            # Check if this row looks like headers
+            row_cells = [worksheet.cell(row=row, column=col).value 
+                        for col in range(1, min(20, worksheet.max_column + 1))]
+            
+            # Filter non-empty cells
+            non_empty = [cell for cell in row_cells if cell is not None]
+            
+            if len(non_empty) >= 2:  # Potential header row
+                # Analyze the pattern below this row
+                region_info = self._analyze_region_below(worksheet, row, len(non_empty), scan_all_rows=scan_all_rows)
+                if region_info and region_info['rows'] > 0:
+                    regions.append({
+                        'header_row': row,
+                        'header_col': 1,
+                        'type': region_info['type'],
+                        'rows': region_info['rows'],
+                        'cols': region_info['cols']
+                    })
+                    
+                    # Mark rows as used to avoid overlapping regions
+                    for r in range(row, row + region_info['rows'] + 1):
+                        used_rows.add(r)
+        
+        # Prioritize larger regions and tables over key-value pairs
+        regions.sort(key=lambda x: (x['type'] == 'table', x['rows'] * x['cols']), reverse=True)
+        
+        # Return only the best region to avoid confusion
+        return regions[:1] if regions else []
+
+    def _analyze_region_below(self, worksheet: Worksheet, header_row: int, 
+                             header_cols: int, scan_all_rows: bool = False) -> Optional[Dict]:
+        """Analyze data pattern below a potential header row.
+        
+        Args:
+            worksheet: The worksheet to analyze
+            header_row: Row number of the potential header
+            header_cols: Number of columns in the header
+            scan_all_rows: If True, scan all rows in the worksheet
+        """
+        
+        # Look at rows below to determine pattern
+        data_rows = 0
+        consistent_structure = True
+        
+        # Determine max rows to scan
+        max_rows_to_scan = worksheet.max_row if scan_all_rows else min(header_row + 50, worksheet.max_row)
+        
+        for row in range(header_row + 1, max_rows_to_scan + 1):
+            row_data = [worksheet.cell(row=row, column=col).value 
+                       for col in range(1, header_cols + 1)]
+            
+            non_empty_count = sum(1 for cell in row_data if cell is not None)
+            
+            # If we find an empty row after some data rows, consider it the end of the data region
+            # unless we're scanning all rows, in which case we continue past empty rows
+            if non_empty_count == 0 and data_rows > 0 and not scan_all_rows:
+                break  # End of data
+            
+            if non_empty_count > 0:  # Only count non-empty rows
+                data_rows += 1
+                
+                # Check if structure is consistent with table format
+                if non_empty_count < header_cols * 0.3:  # Less than 30% filled
+                    consistent_structure = False
+        
+        if data_rows >= 1:
+            return {
+                'type': 'table' if consistent_structure and data_rows > 1 else 'key_value_pairs',
+                'rows': data_rows,
+                'cols': header_cols
+            }
+        
+        return None
+
+    def _create_subtable_config(self, worksheet: Worksheet, region: Dict, scan_all_rows: bool = False) -> Optional[Dict]:
+        """Create subtable configuration based on detected region.
+        
+        Args:
+            worksheet: The worksheet to analyze
+            region: Region information from _scan_data_regions
+            scan_all_rows: If True, configure to extract all rows
+        """
+        
+        header_row = region['header_row']
+        header_col = region['header_col']
+        
+        # Get headers
+        headers = []
+        for col in range(header_col, header_col + region['cols']):
+            cell_value = worksheet.cell(row=header_row, column=col).value
+            if cell_value:
+                headers.append(str(cell_value).strip())
+        
+        if not headers:
+            return None
+        
+        # Create column mappings
+        column_mappings = {}
+        for header in headers:
+            column_mappings[header] = normalize_column_name(header)
+        
+        # Determine search text for this region
+        search_text = headers[0] if headers else "Data"
+        
+        # Determine max_rows based on scan_all_rows flag
+        max_rows = worksheet.max_row if scan_all_rows else region['rows'] + 10
+        
+        config = {
+            "name": f"auto_detected_{region['type']}_{header_row}",
+            "type": region['type'],
+            "header_search": {
+                "method": "contains_text",
+                "text": search_text,
+                "column": "A",
+                "search_range": f"A{max(1, header_row-2)}:A{header_row+2}"
+            },
+            "data_extraction": {
+                "headers_row_offset": 0,
+                "data_row_offset": 1,
+                "max_columns": region['cols'],
+                "max_rows": max_rows,
+                "column_mappings": column_mappings
+            }
+        }
+        
+        # Add orientation for key-value pairs
+        if region['type'] == 'key_value_pairs':
+            config['data_extraction']['orientation'] = 'horizontal'
+        
+        return config

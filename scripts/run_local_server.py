@@ -7,6 +7,7 @@ import click
 import logging
 from pathlib import Path
 
+
 # Add src to path
 script_dir = Path(__file__).parent
 project_root = script_dir.parent
@@ -15,6 +16,7 @@ sys.path.insert(0, str(project_root / 'src'))
 from src.main import app, setup_logging
 from src.config_manager import ConfigManager
 
+
 @click.command()
 @click.option('--host', default='0.0.0.0', help='Host to bind to')
 @click.option('--port', default=8080, type=int, help='Port to bind to')
@@ -22,28 +24,28 @@ from src.config_manager import ConfigManager
 @click.option('--env', default='development', help='Environment (development, testing, production)')
 @click.option('--reload', is_flag=True, help='Enable auto-reload on file changes')
 @click.option('--log-level', default='INFO', help='Log level (DEBUG, INFO, WARNING, ERROR)')
-@click.option('--storage', default=None, type=click.Choice(['LOCAL', 'GCS']), 
+@click.option('--storage', default=None, type=click.Choice(['LOCAL', 'GCS']),
               help='Storage backend to use (LOCAL or GCS). Overrides .env setting.')
 def run_server(host, port, debug, env, reload, log_level, storage):
     """Run the Excel to PowerPoint Merger Flask server locally."""
-    
+
     # Set environment
     os.environ['ENVIRONMENT'] = env
     os.environ['DEVELOPMENT_MODE'] = str(debug).lower()
     os.environ['LOG_LEVEL'] = log_level.upper()
-    
+
     # Override storage backend if specified
     if storage:
         os.environ['STORAGE_BACKEND'] = storage
-        
+
     # Setup logging
     setup_logging()
     logger = logging.getLogger(__name__)
-    
+
     # Load environment-specific configuration
     config_manager = ConfigManager()
     app_config = config_manager.get_app_config()
-    
+
     logger.info(f"Starting Excel to PowerPoint Merger server")
     logger.info(f"Environment: {env}")
     logger.info(f"Debug mode: {debug}")
@@ -51,14 +53,14 @@ def run_server(host, port, debug, env, reload, log_level, storage):
     logger.info(f"Port: {port}")
     logger.info(f"Log level: {log_level}")
     logger.info(f"Storage backend: {os.environ.get('STORAGE_BACKEND', 'From .env file')}")
-    
+
     # Configure Flask app
     app.config.update({
         'DEBUG': debug,
         'TESTING': env == 'testing',
         'ENV': env
     })
-    
+
     if debug:
         logger.info("Debug mode enabled - detailed error messages and auto-reload")
         logger.info("Available endpoints:")
@@ -68,7 +70,7 @@ def run_server(host, port, debug, env, reload, log_level, storage):
         logger.info("  GET  /api/v1/config      - Get default configuration")
         logger.info("  POST /api/v1/config      - Validate configuration")
         logger.info("  GET  /api/v1/stats       - Get system statistics")
-    
+
     try:
         # Run the Flask development server
         app.run(
@@ -83,6 +85,7 @@ def run_server(host, port, debug, env, reload, log_level, storage):
     except Exception as e:
         logger.error(f"Server error: {e}")
         sys.exit(1)
+
 
 if __name__ == '__main__':
     run_server()
