@@ -696,6 +696,82 @@ def manage_config() -> Tuple[Dict[str, Any], int]:
         return create_error_response(e, 400)
 
 
+@app.route('/api/v1/extract', methods=['POST'])
+def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
+    """Extract data from specified Excel sheet and return as JSON."""
+    start_time = datetime.datetime.now()
+    
+    try:
+        # Validate request
+        if 'excel_file' not in request.files:
+            return create_error_response(
+                ValidationError("Excel file is required"), 400
+            )
+        
+        excel_file = request.files['excel_file']
+        sheet_name = request.form.get('sheet_name')
+        
+        if not sheet_name:
+            return create_error_response(
+                ValidationError("sheet_name parameter is required"), 400
+            )
+        
+        # Get configuration (optional)
+        config = None
+        if 'config' in request.form:
+            try:
+                config = json.loads(request.form.get('config'))
+            except json.JSONDecodeError as e:
+                return create_error_response(
+                    ValidationError(f"Invalid JSON configuration: {e}"), 400
+                )
+        
+        # Get auto-detect setting
+        auto_detect = request.form.get('auto_detect', 'true').lower() == 'true'
+        
+        logger.info(f"Extracting data from sheet '{sheet_name}' with auto_detect={auto_detect}")
+        
+        # Process Excel file (use existing memory/file handling logic)
+        excel_processor = ExcelProcessor(excel_file)
+        try:
+            # Extract data from single sheet
+            extracted_data = excel_processor.extract_single_sheet(
+                sheet_name=sheet_name,
+                config=config,
+                auto_detect=auto_detect
+            )
+            
+            # Calculate processing time
+            processing_time = (datetime.datetime.now() - start_time).total_seconds() * 1000
+            
+            # Build response
+            response = {
+                'success': True,
+                'sheet_name': sheet_name,
+                'extracted_data': extracted_data['data'],
+                'metadata': {
+                    'total_rows': extracted_data['metadata']['total_rows'],
+                    'total_columns': extracted_data['metadata']['total_columns'],
+                    'extraction_method': extracted_data['metadata']['method'],
+                    'data_types_detected': extracted_data['metadata']['types'],
+                    'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
+                    'processing_time_ms': round(processing_time, 2)
+                }
+            }
+            
+            return response, 200
+            
+        finally:
+            excel_processor.close()
+    
+    except ValidationError as e:
+        logger.warning(f"Validation error in extract endpoint: {e}")
+        return create_error_response(e, 400)
+    except Exception as e:
+        logger.exception(f"Error in extract endpoint: {e}")
+        return create_error_response(e, 500)
+
+
 @app.route('/api/v1/stats', methods=['GET'])
 def get_stats() -> Tuple[Dict[str, Any], int]:
     """Get system statistics with enhanced feature information."""

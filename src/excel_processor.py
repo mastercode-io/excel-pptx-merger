@@ -712,6 +712,202 @@ class ExcelProcessor:
         
         return result
 
+    def extract_single_sheet(self, sheet_name: str, config: Optional[Dict] = None, 
+                            auto_detect: bool = True) -> Dict[str, Any]:
+        """Extract data from a single specified sheet with auto-detection support.
+        
+        Args:
+            sheet_name: Name of the Excel sheet to process
+            config: Optional extraction configuration
+            auto_detect: Whether to auto-detect structure when no config provided
+            
+        Returns:
+            Dictionary containing extracted data and metadata
+        """
+        # Validate sheet exists
+        if sheet_name not in self.workbook.sheetnames:
+            available_sheets = ", ".join(self.workbook.sheetnames)
+            raise ValidationError(
+                f"Sheet '{sheet_name}' not found. Available sheets: {available_sheets}"
+            )
+        
+        worksheet = self.workbook[sheet_name]
+        
+        # Create or use provided configuration
+        if config is None and auto_detect:
+            logger.info(f"Auto-detecting structure for sheet: {sheet_name}")
+            detection_config = self._auto_detect_sheet_structure(worksheet)
+            extraction_method = "auto_detect"
+        elif config:
+            detection_config = config
+            extraction_method = "config_based"
+        else:
+            raise ValidationError("Either provide a config or enable auto_detect")
+        
+        # Extract data using the configuration
+        sheet_config = {sheet_name: detection_config}
+        extracted_data = self.extract_data({}, sheet_config)
+        
+        # Get sheet metadata
+        metadata = self._get_sheet_metadata(worksheet, detection_config, extraction_method)
+        
+        return {
+            'data': extracted_data.get(normalize_column_name(sheet_name), {}),
+            'metadata': metadata
+        }
+
+    def _auto_detect_sheet_structure(self, worksheet: Worksheet) -> Dict[str, Any]:
+        """Auto-detect data structure in worksheet."""
+        
+        # Scan worksheet to find data patterns
+        data_regions = self._scan_data_regions(worksheet)
+        
+        subtables = []
+        for region in data_regions:
+            subtable_config = self._create_subtable_config(worksheet, region)
+            if subtable_config:
+                subtables.append(subtable_config)
+        
+        return {"subtables": subtables}
+
+    def _scan_data_regions(self, worksheet: Worksheet, max_scan_rows: int = 100) -> List[Dict]:
+        """Scan worksheet to identify distinct data regions."""
+        regions = []
+        used_rows = set()  # Track rows already part of a region
+        
+        # Simple algorithm: look for header-like patterns
+        for row in range(1, min(max_scan_rows, worksheet.max_row + 1)):
+            # Skip if this row is already part of another region
+            if row in used_rows:
+                continue
+                
+            # Check if this row looks like headers
+            row_cells = [worksheet.cell(row=row, column=col).value 
+                        for col in range(1, min(20, worksheet.max_column + 1))]
+            
+            # Filter non-empty cells
+            non_empty = [cell for cell in row_cells if cell is not None]
+            
+            if len(non_empty) >= 2:  # Potential header row
+                # Analyze the pattern below this row
+                region_info = self._analyze_region_below(worksheet, row, len(non_empty))
+                if region_info and region_info['rows'] > 0:
+                    regions.append({
+                        'header_row': row,
+                        'header_col': 1,
+                        'type': region_info['type'],
+                        'rows': region_info['rows'],
+                        'cols': region_info['cols']
+                    })
+                    
+                    # Mark rows as used to avoid overlapping regions
+                    for r in range(row, row + region_info['rows'] + 1):
+                        used_rows.add(r)
+        
+        # Prioritize larger regions and tables over key-value pairs
+        regions.sort(key=lambda x: (x['type'] == 'table', x['rows'] * x['cols']), reverse=True)
+        
+        # Return only the best region to avoid confusion
+        return regions[:1] if regions else []
+
+    def _analyze_region_below(self, worksheet: Worksheet, header_row: int, 
+                             header_cols: int) -> Optional[Dict]:
+        """Analyze data pattern below a potential header row."""
+        
+        # Look at next few rows to determine pattern
+        data_rows = 0
+        consistent_structure = True
+        
+        for row in range(header_row + 1, min(header_row + 10, worksheet.max_row + 1)):
+            row_data = [worksheet.cell(row=row, column=col).value 
+                       for col in range(1, header_cols + 1)]
+            
+            non_empty_count = sum(1 for cell in row_data if cell is not None)
+            
+            if non_empty_count == 0:
+                break  # End of data
+            
+            data_rows += 1
+            
+            # Check if structure is consistent with table format
+            if non_empty_count < header_cols * 0.3:  # Less than 30% filled
+                consistent_structure = False
+        
+        if data_rows >= 1:
+            return {
+                'type': 'table' if consistent_structure and data_rows > 1 else 'key_value_pairs',
+                'rows': data_rows,
+                'cols': header_cols
+            }
+        
+        return None
+
+    def _create_subtable_config(self, worksheet: Worksheet, region: Dict) -> Optional[Dict]:
+        """Create subtable configuration based on detected region."""
+        
+        header_row = region['header_row']
+        header_col = region['header_col']
+        
+        # Get headers
+        headers = []
+        for col in range(header_col, header_col + region['cols']):
+            cell_value = worksheet.cell(row=header_row, column=col).value
+            if cell_value:
+                headers.append(str(cell_value).strip())
+        
+        if not headers:
+            return None
+        
+        # Create column mappings
+        column_mappings = {}
+        for header in headers:
+            column_mappings[header] = normalize_column_name(header)
+        
+        # Determine search text for this region
+        search_text = headers[0] if headers else "Data"
+        
+        config = {
+            "name": f"auto_detected_{region['type']}_{header_row}",
+            "type": region['type'],
+            "header_search": {
+                "method": "contains_text",
+                "text": search_text,
+                "column": "A",
+                "search_range": f"A{max(1, header_row-2)}:A{header_row+2}"
+            },
+            "data_extraction": {
+                "headers_row_offset": 0,
+                "data_row_offset": 1,
+                "max_columns": region['cols'],
+                "max_rows": region['rows'] + 10,  # Add buffer
+                "column_mappings": column_mappings
+            }
+        }
+        
+        # Add orientation for key-value pairs
+        if region['type'] == 'key_value_pairs':
+            config['data_extraction']['orientation'] = 'horizontal'
+        
+        return config
+
+    def _get_sheet_metadata(self, worksheet: Worksheet, config: Dict, 
+                           method: str) -> Dict[str, Any]:
+        """Get metadata about the processed sheet."""
+        
+        types_detected = []
+        for subtable in config.get('subtables', []):
+            subtable_type = subtable.get('type', 'unknown')
+            if subtable_type not in types_detected:
+                types_detected.append(subtable_type)
+        
+        return {
+            'total_rows': worksheet.max_row,
+            'total_columns': worksheet.max_column,
+            'method': method,
+            'types': types_detected,
+            'subtables_detected': len(config.get('subtables', []))
+        }
+
     def cleanup_images(self, images: Dict[str, List[Dict[str, Any]]], config: Dict[str, Any] = None) -> None:
         """Clean up extracted images based on configuration.
         
