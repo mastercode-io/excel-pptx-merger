@@ -34,22 +34,30 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                                     "type": "object",
                                     "properties": {
                                         "name": {"type": "string"},
-                                        "type": {"type": "string", "enum": ["key_value_pairs", "table"]},
+                                        "type": {
+                                            "type": "string",
+                                            "enum": ["key_value_pairs", "table"],
+                                        },
                                         "header_search": {
                                             "type": "object",
                                             "properties": {
                                                 "method": {"type": "string"},
                                                 "text": {"type": "string"},
                                                 "column": {"type": "string"},
-                                                "search_range": {"type": "string"}
+                                                "search_range": {"type": "string"},
                                             },
-                                            "required": ["method"]
+                                            "required": ["method"],
                                         },
                                         "data_extraction": {
                                             "type": "object",
                                             "properties": {
-                                                "orientation": {"type": "string", "enum": ["horizontal", "vertical"]},
-                                                "headers_row_offset": {"type": "integer"},
+                                                "orientation": {
+                                                    "type": "string",
+                                                    "enum": ["horizontal", "vertical"],
+                                                },
+                                                "headers_row_offset": {
+                                                    "type": "integer"
+                                                },
                                                 "data_row_offset": {"type": "integer"},
                                                 "max_columns": {"type": "integer"},
                                                 "max_rows": {"type": "integer"},
@@ -64,25 +72,43 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                                                                 {
                                                                     "type": "object",
                                                                     "properties": {
-                                                                        "name": {"type": "string"},
-                                                                        "type": {"type": "string", "enum": ["text", "image", "number", "date", "boolean"]}
+                                                                        "name": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "type": {
+                                                                            "type": "string",
+                                                                            "enum": [
+                                                                                "text",
+                                                                                "image",
+                                                                                "number",
+                                                                                "date",
+                                                                                "boolean",
+                                                                            ],
+                                                                        },
                                                                     },
-                                                                    "required": ["name"]
-                                                                }
+                                                                    "required": [
+                                                                        "name"
+                                                                    ],
+                                                                },
                                                             ]
                                                         }
-                                                    }
-                                                }
-                                            }
-                                        }
+                                                    },
+                                                },
+                                            },
+                                        },
                                     },
-                                    "required": ["name", "type", "header_search", "data_extraction"]
-                                }
+                                    "required": [
+                                        "name",
+                                        "type",
+                                        "header_search",
+                                        "data_extraction",
+                                    ],
+                                },
                             }
                         },
-                        "required": ["subtables"]
+                        "required": ["subtables"],
                     }
-                }
+                },
             },
             "global_settings": {
                 "type": "object",
@@ -94,8 +120,8 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                             "enabled": {"type": "boolean"},
                             "delay_seconds": {"type": "integer"},
                             "keep_on_error": {"type": "boolean"},
-                            "development_mode": {"type": "boolean"}
-                        }
+                            "development_mode": {"type": "boolean"},
+                        },
                     },
                     "image_storage": {
                         "type": "object",
@@ -104,53 +130,53 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                                 "type": "object",
                                 "properties": {
                                     "directory": {"type": "string"},
-                                    "cleanup_after_merge": {"type": "boolean"}
-                                }
+                                    "cleanup_after_merge": {"type": "boolean"},
+                                },
                             },
                             "production_mode": {
                                 "type": "object",
                                 "properties": {
                                     "directory": {"type": "string"},
-                                    "cleanup_after_merge": {"type": "boolean"}
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+                                    "cleanup_after_merge": {"type": "boolean"},
+                                },
+                            },
+                        },
+                    },
+                },
+            },
         },
-        "required": ["version", "sheet_configs"]
+        "required": ["version", "sheet_configs"],
     }
-    
+
     validate_json_schema(config, schema)
 
 
 def get_field_type_from_mapping(column_mapping: Union[str, Dict[str, Any]]) -> str:
     """Extract field type from column mapping.
-    
+
     Supports both old format (string) and new format (object with name and type).
     Default type is 'text' if not specified.
     """
     if isinstance(column_mapping, str):
         return "text"  # Default type for backward compatibility
-    
+
     return column_mapping.get("type", "text")
 
 
 def validate_merge_fields(template_text: str) -> List[str]:
     """Extract and validate merge fields from template text."""
-    merge_field_pattern = r'\{\{([^}]+)\}\}'
+    merge_field_pattern = r"\{\{([^}]+)\}\}"
     fields = re.findall(merge_field_pattern, template_text)
-    
+
     validated_fields = []
     for field in fields:
         field = field.strip()
         if field:
             # Validate field name format
-            if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*$', field):
+            if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*$", field):
                 raise ValidationError(f"Invalid merge field format: {{{{{field}}}}}")
             validated_fields.append(field)
-    
+
     return validated_fields
 
 
@@ -158,23 +184,23 @@ def normalize_column_name(column_name: str) -> str:
     """Normalize Excel column names to valid JSON keys."""
     if not column_name or not isinstance(column_name, str):
         return "unnamed_column"
-    
+
     # Convert to lowercase
     normalized = column_name.lower().strip()
-    
+
     # Replace spaces and special characters with underscores
-    normalized = re.sub(r'[^\w]+', '_', normalized)
-    
+    normalized = re.sub(r"[^\w]+", "_", normalized)
+
     # Remove multiple underscores
-    normalized = re.sub(r'_+', '_', normalized)
-    
+    normalized = re.sub(r"_+", "_", normalized)
+
     # Remove leading/trailing underscores
-    normalized = normalized.strip('_')
-    
+    normalized = normalized.strip("_")
+
     # Ensure it starts with a letter or underscore
-    if normalized and not re.match(r'^[a-zA-Z_]', normalized):
-        normalized = f'col_{normalized}'
-    
+    if normalized and not re.match(r"^[a-zA-Z_]", normalized):
+        normalized = f"col_{normalized}"
+
     return normalized or "unnamed_column"
 
 
@@ -182,9 +208,9 @@ def validate_cell_range(cell_range: str) -> bool:
     """Validate Excel cell range format."""
     if not cell_range:
         return False
-    
+
     # Pattern for cell range like A1:B10 or A1
-    pattern = r'^[A-Z]+\d+(:[A-Z]+\d+)?$'
+    pattern = r"^[A-Z]+\d+(:[A-Z]+\d+)?$"
     return bool(re.match(pattern, cell_range.upper()))
 
 
@@ -192,9 +218,9 @@ def validate_column_reference(column_ref: str) -> bool:
     """Validate Excel column reference format."""
     if not column_ref:
         return False
-    
+
     # Pattern for column reference like A, B, AA, etc.
-    pattern = r'^[A-Z]+$'
+    pattern = r"^[A-Z]+$"
     return bool(re.match(pattern, column_ref.upper()))
 
 
@@ -202,16 +228,16 @@ def sanitize_filename(filename: str) -> str:
     """Sanitize filename for safe file system usage."""
     if not filename:
         return "unnamed_file"
-    
+
     # Remove or replace dangerous characters
-    sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
-    
+    sanitized = re.sub(r'[<>:"/\\|?*]', "_", filename)
+
     # Remove control characters
-    sanitized = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', sanitized)
-    
+    sanitized = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", sanitized)
+
     # Limit length
     sanitized = sanitized[:255]
-    
+
     # Ensure not empty
     return sanitized or "unnamed_file"
 
@@ -237,14 +263,14 @@ def validate_api_request(request_data: Dict[str, Any]) -> None:
     """Validate API request data structure."""
     if not isinstance(request_data, dict):
         raise ValidationError("Request data must be a JSON object")
-    
+
     # Check for required files
-    if 'excel_file' not in request_data and 'pptx_file' not in request_data:
+    if "excel_file" not in request_data and "pptx_file" not in request_data:
         raise ValidationError("Both excel_file and pptx_file are required")
-    
+
     # Validate configuration if provided
-    if 'config' in request_data:
-        if not isinstance(request_data['config'], dict):
+    if "config" in request_data:
+        if not isinstance(request_data["config"], dict):
             raise ValidationError("Configuration must be a JSON object")
 
 
@@ -252,11 +278,11 @@ def is_empty_cell_value(value: Any) -> bool:
     """Check if cell value should be considered empty."""
     if value is None:
         return True
-    
+
     if isinstance(value, str):
         return not value.strip()
-    
+
     if isinstance(value, (int, float)):
         return False  # Numbers are never considered empty
-    
+
     return not bool(value)

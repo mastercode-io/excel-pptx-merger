@@ -17,7 +17,11 @@ from PIL import Image as PILImage
 
 from .temp_file_manager import TempFileManager
 from .utils.exceptions import ExcelProcessingError, ValidationError
-from .utils.validation import normalize_column_name, validate_cell_range, is_empty_cell_value
+from .utils.validation import (
+    normalize_column_name,
+    validate_cell_range,
+    is_empty_cell_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +36,9 @@ class ExcelProcessor:
         self.workbook = None
         self.data_frame = None
         self._is_memory_file = not isinstance(file_input, str)
-        
+        self._memory_file = None
+        self._image_cache = {}
+
         if self._is_memory_file:
             self._load_from_memory()
         else:
@@ -55,14 +61,99 @@ class ExcelProcessor:
         """Load Excel file from memory (file-like object)."""
         try:
             # Ensure the file pointer is at the beginning
-            if hasattr(self.file_input, 'seek'):
+            if hasattr(self.file_input, "seek"):
                 self.file_input.seek(0)
-            
-            # Load workbook from file-like object
-            self.workbook = load_workbook(self.file_input, data_only=True)
+
+            # Read the entire file content into memory to avoid closed file issues
+            # This ensures that image data can be accessed even if the original file handle closes
+            import io
+
+            file_content = self.file_input.read()
+            if hasattr(self.file_input, "seek"):
+                self.file_input.seek(0)  # Reset for any other operations
+
+            # Create a new BytesIO object from the content
+            memory_file = io.BytesIO(file_content)
+
+            # Load workbook from the in-memory file
+            self.workbook = load_workbook(memory_file, data_only=True)
+
+            # Keep reference to the memory file to prevent it from being garbage collected
+            self._memory_file = memory_file
+
+            # Initialize image cache for pre-loaded data
+            self._image_cache = {}
+
+            # Pre-extract all image data immediately while file is accessible
+            # This prevents issues with closed file handles later
+            self._preload_image_data()
+
             logger.info("Successfully loaded Excel file from memory")
         except Exception as e:
             raise ExcelProcessingError(f"Invalid Excel file format from memory: {e}")
+
+    def _preload_image_data(self) -> None:
+        """Pre-extract all image data to prevent closed file handle issues."""
+        try:
+            logger.debug("Pre-loading image data to prevent file handle issues")
+            image_count = 0
+
+            for sheet_name in self.workbook.sheetnames:
+                sheet = self.workbook[sheet_name]
+
+                # Skip hidden sheets
+                if sheet.sheet_state == "hidden":
+                    continue
+
+                # Check if sheet has images
+                if not hasattr(sheet, "_images"):
+                    continue
+
+                sheet_images = []
+                for idx, image in enumerate(sheet._images):
+                    try:
+                        # Extract image data immediately while file handle is open
+                        image_data = image._data()
+                        if image_data:
+                            # Cache the image data along with position info
+                            cached_image = {
+                                "data": image_data,
+                                "anchor": (
+                                    image.anchor if hasattr(image, "anchor") else None
+                                ),
+                                "original_image": image,  # Keep reference for position extraction
+                            }
+                            sheet_images.append(cached_image)
+                            image_count += 1
+                        else:
+                            logger.warning(
+                                f"No data for image {idx} in sheet {sheet_name}"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to pre-load image {idx} from sheet {sheet_name}: {e}"
+                        )
+                        # Add placeholder to maintain index consistency
+                        sheet_images.append(
+                            {
+                                "data": None,
+                                "anchor": None,
+                                "original_image": image,
+                                "error": str(e),
+                            }
+                        )
+
+                if sheet_images:
+                    self._image_cache[sheet_name] = sheet_images
+
+            logger.info(
+                f"Pre-loaded {image_count} images from {len(self._image_cache)} sheets"
+            )
+
+        except Exception as e:
+            logger.error(f"Error during image pre-loading: {e}")
+            # Initialize empty cache on error
+            self._image_cache = {}
 
     def get_sheet_names(self) -> List[str]:
         """Get list of sheet names in the workbook."""
@@ -70,22 +161,24 @@ class ExcelProcessor:
             self._validate_file()
         return list(self.workbook.sheetnames)
 
-    def extract_data(self, global_settings: Dict[str, Any], sheet_config: Dict[str, Any]) -> Dict[str, Any]:
+    def extract_data(
+        self, global_settings: Dict[str, Any], sheet_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Extract data from Excel sheet according to configuration.
-        
+
         Args:
             global_settings: Global settings for extraction
             sheet_config: Configuration for each sheet
-            
+
         Returns:
             Dictionary of extracted data
         """
         try:
             extracted_data = {}
-            
+
             # Store global settings for use in other methods
             self._global_settings = global_settings
-            
+
             for sheet_name, config in sheet_config.items():
                 logger.info(f"Processing sheet: {sheet_name}")
 
@@ -98,7 +191,9 @@ class ExcelProcessor:
 
                 # Normalize sheet name for JSON compatibility
                 normalized_sheet_name = normalize_column_name(sheet_name)
-                logger.debug(f"Normalized sheet name: '{sheet_name}' -> '{normalized_sheet_name}'")
+                logger.debug(
+                    f"Normalized sheet name: '{sheet_name}' -> '{normalized_sheet_name}'"
+                )
 
                 extracted_data[normalized_sheet_name] = sheet_data
 
@@ -107,15 +202,17 @@ class ExcelProcessor:
         except Exception as e:
             raise ExcelProcessingError(f"Failed to extract data: {e}")
 
-    def _process_sheet(self, worksheet: Worksheet, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _process_sheet(
+        self, worksheet: Worksheet, config: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Process a single worksheet according to configuration."""
         sheet_data = {}
 
-        if 'subtables' not in config:
+        if "subtables" not in config:
             raise ValidationError("Sheet configuration missing 'subtables'")
 
-        for subtable_config in config['subtables']:
-            subtable_name = subtable_config.get('name', 'unnamed_subtable')
+        for subtable_config in config["subtables"]:
+            subtable_name = subtable_config.get("name", "unnamed_subtable")
             logger.debug(f"Processing subtable: {subtable_name}")
 
             try:
@@ -127,11 +224,13 @@ class ExcelProcessor:
 
         return sheet_data
 
-    def _extract_subtable(self, worksheet: Worksheet, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_subtable(
+        self, worksheet: Worksheet, config: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Extract data for a specific subtable configuration."""
-        subtable_type = config.get('type', 'table')
-        header_search = config.get('header_search', {})
-        data_extraction = config.get('data_extraction', {})
+        subtable_type = config.get("type", "table")
+        header_search = config.get("header_search", {})
+        data_extraction = config.get("data_extraction", {})
 
         # Find the header location
         header_location = self._find_header_location(worksheet, header_search)
@@ -140,29 +239,33 @@ class ExcelProcessor:
             return {}
 
         # Extract data based on type
-        if subtable_type == 'key_value_pairs':
-            return self._extract_key_value_pairs(worksheet, header_location, data_extraction)
-        elif subtable_type == 'table':
+        if subtable_type == "key_value_pairs":
+            return self._extract_key_value_pairs(
+                worksheet, header_location, data_extraction
+            )
+        elif subtable_type == "table":
             return self._extract_table_data(worksheet, header_location, data_extraction)
         else:
             raise ValidationError(f"Unknown subtable type: {subtable_type}")
 
-    def _find_header_location(self, worksheet: Worksheet, search_config: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    def _find_header_location(
+        self, worksheet: Worksheet, search_config: Dict[str, Any]
+    ) -> Optional[Tuple[int, int]]:
         """Find header location based on search configuration."""
-        method = search_config.get('method', 'contains_text')
-        search_text = search_config.get('text', '')
-        search_column = search_config.get('column', 'A')
-        search_range = search_config.get('search_range', 'A1:A10')
+        method = search_config.get("method", "contains_text")
+        search_text = search_config.get("text", "")
+        search_column = search_config.get("column", "A")
+        search_range = search_config.get("search_range", "A1:A10")
 
         if not validate_cell_range(search_range):
             raise ValidationError(f"Invalid cell range: {search_range}")
 
         try:
-            if method == 'contains_text':
+            if method == "contains_text":
                 return self._find_by_text_contains(worksheet, search_text, search_range)
-            elif method == 'exact_match':
+            elif method == "exact_match":
                 return self._find_by_exact_match(worksheet, search_text, search_range)
-            elif method == 'regex':
+            elif method == "regex":
                 return self._find_by_regex(worksheet, search_text, search_range)
             else:
                 raise ValidationError(f"Unknown search method: {method}")
@@ -171,7 +274,9 @@ class ExcelProcessor:
             logger.error(f"Header search failed: {e}")
             return None
 
-    def _find_by_text_contains(self, worksheet: Worksheet, search_text: str, search_range: str) -> Optional[Tuple[int, int]]:
+    def _find_by_text_contains(
+        self, worksheet: Worksheet, search_text: str, search_range: str
+    ) -> Optional[Tuple[int, int]]:
         """Find cell containing specific text."""
         for row in worksheet[search_range]:
             for cell in row:
@@ -180,7 +285,9 @@ class ExcelProcessor:
                         return (cell.row, cell.column)
         return None
 
-    def _find_by_exact_match(self, worksheet: Worksheet, search_text: str, search_range: str) -> Optional[Tuple[int, int]]:
+    def _find_by_exact_match(
+        self, worksheet: Worksheet, search_text: str, search_range: str
+    ) -> Optional[Tuple[int, int]]:
         """Find cell with exact text match."""
         for row in worksheet[search_range]:
             for cell in row:
@@ -188,7 +295,9 @@ class ExcelProcessor:
                     return (cell.row, cell.column)
         return None
 
-    def _find_by_regex(self, worksheet: Worksheet, pattern: str, search_range: str) -> Optional[Tuple[int, int]]:
+    def _find_by_regex(
+        self, worksheet: Worksheet, pattern: str, search_range: str
+    ) -> Optional[Tuple[int, int]]:
         """Find cell matching regex pattern."""
         try:
             regex = re.compile(pattern)
@@ -200,21 +309,30 @@ class ExcelProcessor:
             raise ValidationError(f"Invalid regex pattern: {e}")
         return None
 
-    def _extract_key_value_pairs(self, worksheet: Worksheet, header_location: Tuple[int, int], config: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_key_value_pairs(
+        self,
+        worksheet: Worksheet,
+        header_location: Tuple[int, int],
+        config: Dict[str, Any],
+    ) -> Dict[str, Any]:
         """Extract key-value pairs from Excel sheet."""
         header_row, header_col = header_location
-        orientation = config.get('orientation', 'horizontal')
-        max_pairs = config.get('max_columns', 10) if orientation == 'horizontal' else config.get('max_rows', 10)
-        column_mappings = config.get('column_mappings', {})
+        orientation = config.get("orientation", "horizontal")
+        max_pairs = (
+            config.get("max_columns", 10)
+            if orientation == "horizontal"
+            else config.get("max_rows", 10)
+        )
+        column_mappings = config.get("column_mappings", {})
 
         data = {}
         field_types = {}  # Store field type information
 
         try:
-            if orientation == 'horizontal':
+            if orientation == "horizontal":
                 # Keys in one row, values in the next row
-                keys_row = header_row + config.get('headers_row_offset', 0)
-                values_row = header_row + config.get('data_row_offset', 1)
+                keys_row = header_row + config.get("headers_row_offset", 0)
+                values_row = header_row + config.get("data_row_offset", 1)
 
                 for col_offset in range(max_pairs):
                     col = header_col + col_offset
@@ -234,21 +352,23 @@ class ExcelProcessor:
                                 field_type = "text"  # Default type
                             else:
                                 # New format - object with name and type
-                                mapped_key = mapping.get("name", normalize_column_name(original_key))
+                                mapped_key = mapping.get(
+                                    "name", normalize_column_name(original_key)
+                                )
                                 field_type = mapping.get("type", "text")
                         else:
                             mapped_key = normalize_column_name(original_key)
                             field_type = "text"  # Default type
 
                         data[mapped_key] = value
-                        
+
                         # Store field type if not the default text type
                         if field_type != "text":
                             field_types[mapped_key] = field_type
             else:
                 # Vertical orientation: keys in one column, values in adjacent column
-                keys_col = header_col + config.get('headers_row_offset', 0)
-                values_col = header_col + config.get('data_row_offset', 1)
+                keys_col = header_col + config.get("headers_row_offset", 0)
+                values_col = header_col + config.get("data_row_offset", 1)
 
                 for row_offset in range(max_pairs):
                     row = header_row + row_offset
@@ -268,14 +388,16 @@ class ExcelProcessor:
                                 field_type = "text"  # Default type
                             else:
                                 # New format - object with name and type
-                                mapped_key = mapping.get("name", normalize_column_name(original_key))
+                                mapped_key = mapping.get(
+                                    "name", normalize_column_name(original_key)
+                                )
                                 field_type = mapping.get("type", "text")
                         else:
                             mapped_key = normalize_column_name(original_key)
                             field_type = "text"  # Default type
 
                         data[mapped_key] = value
-                        
+
                         # Store field type if not the default text type
                         if field_type != "text":
                             field_types[mapped_key] = field_type
@@ -289,21 +411,26 @@ class ExcelProcessor:
 
         return data
 
-    def _extract_table_data(self, worksheet: Worksheet, header_location: Tuple[int, int], config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_table_data(
+        self,
+        worksheet: Worksheet,
+        header_location: Tuple[int, int],
+        config: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
         """Extract table data from Excel sheet."""
         header_row, header_col = header_location
-        headers_row = header_row + config.get('headers_row_offset', 0)
-        data_start_row = headers_row + config.get('data_row_offset', 1)
-        max_columns = config.get('max_columns', 20)
-        max_rows = config.get('max_rows', 1000)
-        column_mappings = config.get('column_mappings', {})
+        headers_row = header_row + config.get("headers_row_offset", 0)
+        data_start_row = headers_row + config.get("data_row_offset", 1)
+        max_columns = config.get("max_columns", 20)
+        max_rows = config.get("max_rows", 1000)
+        column_mappings = config.get("column_mappings", {})
 
         try:
             # Extract headers
             headers = []
             original_headers = []  # Store original headers for mapping
             field_types = {}  # Store field types for each header
-            
+
             for col_offset in range(max_columns):
                 col = header_col + col_offset
                 header_cell = worksheet.cell(row=headers_row, column=col)
@@ -311,7 +438,7 @@ class ExcelProcessor:
                 if header_cell.value and not is_empty_cell_value(header_cell.value):
                     header = str(header_cell.value).strip()
                     original_headers.append(header)
-                    
+
                     # Apply column mapping if available
                     if header in column_mappings:
                         mapping = column_mappings[header]
@@ -321,12 +448,14 @@ class ExcelProcessor:
                             field_type = "text"  # Default type
                         else:
                             # New format - object with name and type
-                            mapped_header = mapping.get("name", normalize_column_name(header))
+                            mapped_header = mapping.get(
+                                "name", normalize_column_name(header)
+                            )
                             field_type = mapping.get("type", "text")
                     else:
                         mapped_header = normalize_column_name(header)
                         field_type = "text"  # Default type
-                    
+
                     headers.append(mapped_header)
                     field_types[mapped_header] = field_type
                 else:
@@ -343,7 +472,9 @@ class ExcelProcessor:
                 row_data = {}
                 has_data = False
 
-                for col_offset, (header, original_header) in enumerate(zip(headers, original_headers)):
+                for col_offset, (header, original_header) in enumerate(
+                    zip(headers, original_headers)
+                ):
                     col = header_col + col_offset
                     cell = worksheet.cell(row=row, column=col)
                     value = cell.value
@@ -353,7 +484,7 @@ class ExcelProcessor:
 
                     # Use the mapped header name for the key
                     row_data[header] = value
-                    
+
                     # Store field type as metadata if not the default text type
                     field_type = field_types.get(header, "text")
                     if field_type != "text":
@@ -374,26 +505,29 @@ class ExcelProcessor:
         except Exception as e:
             raise ExcelProcessingError(f"Failed to extract table data: {e}")
 
-    def extract_images(self, session_dir: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+    def extract_images(
+        self, session_dir: Optional[str] = None
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """Extract images from Excel file and optionally save them to disk.
-        
+
         Args:
-            session_dir: Optional session directory for saving images. If None and 
+            session_dir: Optional session directory for saving images. If None and
                         SAVE_FILES=False, images will only be encoded as base64.
-        
+
         Returns:
             Dictionary mapping sheet names to lists of image metadata.
-            Each image metadata includes format, position, base64 encoding, and 
+            Each image metadata includes format, position, base64 encoding, and
             optionally path/filename if saved to disk.
         """
         # Get app configuration to check SAVE_FILES setting
         from .config_manager import ConfigManager
+
         config_manager = ConfigManager()
         app_config = config_manager.get_app_config()
-        save_files = app_config.get('save_files', False)
-        
+        save_files = app_config.get("save_files", False)
+
         logger.info(f"Extracting images from Excel file - save_files: {save_files}")
-        
+
         # Initialize temp file manager if we need to save files
         temp_manager = None
         if save_files and session_dir:
@@ -402,69 +536,101 @@ class ExcelProcessor:
         elif save_files and self.file_path:
             # Fallback to file path directory if available
             file_dir = os.path.dirname(self.file_path)
-            if 'input' in file_dir:
+            if "input" in file_dir:
                 session_dir = os.path.dirname(file_dir)
             else:
                 session_dir = file_dir
             temp_manager = TempFileManager()
             logger.info(f"Using inferred session directory for images: {session_dir}")
-        
+
         # Initialize result dictionary
         result = {}
-        
+
         # Process each worksheet
         for sheet_name in self.workbook.sheetnames:
             sheet = self.workbook[sheet_name]
-            
+
             # Skip hidden sheets
-            if sheet.sheet_state == 'hidden':
+            if sheet.sheet_state == "hidden":
                 logger.debug(f"Skipping hidden sheet: {sheet_name}")
                 continue
-                
+
             # Initialize list for this sheet's images
             result[sheet_name] = []
-            
+
             # Check if sheet has images
-            if not hasattr(sheet, '_images'):
+            if not hasattr(sheet, "_images"):
                 logger.debug(f"Sheet {sheet_name} has no images")
                 continue
-                
-            logger.info(f"Processing {len(sheet._images)} images in sheet: {sheet_name}")
-            
+
+            logger.info(
+                f"Processing {len(sheet._images)} images in sheet: {sheet_name}"
+            )
+
             # Process each image in the sheet
             for idx, image in enumerate(sheet._images):
                 try:
-                    # Get image data
-                    image_data = image._data()
+                    # Get image data from cache if available (memory loading) or directly (file loading)
+                    image_data = None
+                    cached_image = None
+
+                    if (
+                        hasattr(self, "_image_cache")
+                        and sheet_name in self._image_cache
+                    ):
+                        # Use cached data from memory loading
+                        if idx < len(self._image_cache[sheet_name]):
+                            cached_image = self._image_cache[sheet_name][idx]
+                            image_data = cached_image.get("data")
+                            if cached_image.get("error"):
+                                logger.warning(
+                                    f"Cannot extract image {idx} from sheet {sheet_name}: {cached_image['error']}. Skipping this image."
+                                )
+                                continue
+                    else:
+                        # Direct access for file-based loading
+                        try:
+                            image_data = image._data()
+                        except Exception as e:
+                            logger.warning(
+                                f"Cannot extract image {idx} from sheet {sheet_name}: {e}. Skipping this image."
+                            )
+                            continue
+
                     if not image_data:
                         logger.warning(f"No data for image {idx} in sheet {sheet_name}")
                         continue
-                    
+
                     # Determine image format
                     img_format = self._detect_image_format(image_data)
                     if not img_format:
-                        logger.warning(f"Could not detect format for image {idx} in sheet {sheet_name}")
-                        img_format = 'png'  # Default to PNG
-                    
+                        logger.warning(
+                            f"Could not detect format for image {idx} in sheet {sheet_name}"
+                        )
+                        img_format = "png"  # Default to PNG
+
                     # Generate a unique filename
                     image_filename = f"image_{sheet_name}_{idx}.{img_format}"
-                    
-                    # Extract position information
-                    position = self._extract_image_position(image)
-                    
+
+                    # Extract position information (use cached image if available)
+                    position_source = (
+                        cached_image.get("original_image") if cached_image else image
+                    )
+                    position = self._extract_image_position(position_source)
+
                     # Encode image as base64
                     image_base64 = self._encode_image_as_base64(image_data, img_format)
-                    
+
                     # Initialize image metadata
                     image_meta = {
-                        'filename': image_filename,
-                        'sheet': sheet_name,
-                        'index': idx,
-                        'format': img_format,
-                        'position': position,
-                        'image_base64': image_base64
+                        "filename": image_filename,
+                        "sheet": sheet_name,
+                        "index": idx,
+                        "format": img_format,
+                        "position": position,
+                        "image_base64": image_base64,
                     }
-                    
+
                     # Conditionally save image to disk
                     if save_files and temp_manager and session_dir:
                         try:
@@ -472,40 +638,54 @@ class ExcelProcessor:
                                 session_dir,
                                 image_filename,
                                 image_data,
-                                temp_manager.FILE_TYPE_IMAGE
+                                temp_manager.FILE_TYPE_IMAGE,
                             )
-                            
+
                             # Verify the image was saved
                             if os.path.exists(image_path):
-                                image_meta['path'] = image_path
+                                image_meta["path"] = image_path
                                 logger.debug(f"Saved image to disk: {image_path}")
                             else:
-                                logger.warning(f"Failed to save image {idx} from sheet {sheet_name}")
+                                logger.warning(
+                                    f"Failed to save image {idx} from sheet {sheet_name}"
+                                )
                         except Exception as e:
                             logger.warning(f"Error saving image to disk: {e}")
                     else:
                         # Not saving files, only using base64
-                        logger.debug(f"Image {idx} from sheet {sheet_name} processed in-memory only")
-                    
+                        logger.debug(
+                            f"Image {idx} from sheet {sheet_name} processed in-memory only"
+                        )
+
                     # Add to results
                     result[sheet_name].append(image_meta)
-                    log_msg = f"Extracted image: {image_meta.get('path', 'in-memory only')}"
+                    log_msg = (
+                        f"Extracted image: {image_meta.get('path', 'in-memory only')}"
+                    )
                     logger.debug(log_msg)
-                    
+
                 except Exception as e:
-                    logger.error(f"Error extracting image {idx} from sheet {sheet_name}: {e}")
+                    logger.error(
+                        f"Error extracting image {idx} from sheet {sheet_name}: {e}"
+                    )
                     logger.exception("Image extraction error details")
-            
-            logger.info(f"Extracted {len(result[sheet_name])} images from sheet {sheet_name}")
-        
+
+            logger.info(
+                f"Extracted {len(result[sheet_name])} images from sheet {sheet_name}"
+            )
+
         # Log summary
         total_images = sum(len(images) for images in result.values())
         logger.info(f"Total images extracted: {total_images}")
-        
+
         return result
 
-    def get_image_by_position(self, images: Dict[str, List[Dict[str, Any]]],
-                             target_cell: str, sheet_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_image_by_position(
+        self,
+        images: Dict[str, List[Dict[str, Any]]],
+        target_cell: str,
+        sheet_name: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Find image by cell position or proximity."""
         sheets_to_search = [sheet_name] if sheet_name else images.keys()
 
@@ -514,17 +694,19 @@ class ExcelProcessor:
                 continue
 
             for image_info in images[sheet]:
-                position = image_info.get('position', {})
+                position = image_info.get("position", {})
 
                 # Exact match on from_cell or estimated_cell
-                if (position.get('from_cell') == target_cell or
-                    position.get('estimated_cell') == target_cell):
+                if (
+                    position.get("from_cell") == target_cell
+                    or position.get("estimated_cell") == target_cell
+                ):
                     return image_info
 
                 # Check if target position falls within image range
-                if position.get('coordinates'):
-                    coords = position['coordinates']
-                    if 'from' in coords and 'to' in coords:
+                if position.get("coordinates"):
+                    coords = position["coordinates"]
+                    if "from" in coords and "to" in coords:
                         target_coords = self._cell_to_coordinates(target_cell)
                         if target_coords and self._is_in_range(target_coords, coords):
                             return image_info
@@ -534,12 +716,12 @@ class ExcelProcessor:
     def _cell_to_coordinates(self, cell_ref: str) -> Optional[Dict[str, int]]:
         """Convert cell reference like 'A1' to coordinates."""
         try:
-            match = re.match(r'^([A-Z]+)(\d+)$', cell_ref.upper())
+            match = re.match(r"^([A-Z]+)(\d+)$", cell_ref.upper())
             if match:
                 col_str, row_str = match.groups()
                 return {
-                    'col': column_index_from_string(col_str) - 1,  # 0-based
-                    'row': int(row_str) - 1  # 0-based
+                    "col": column_index_from_string(col_str) - 1,  # 0-based
+                    "row": int(row_str) - 1,  # 0-based
                 }
         except Exception as e:
             logger.debug(f"Failed to convert cell reference {cell_ref}: {e}")
@@ -548,11 +730,13 @@ class ExcelProcessor:
     def _is_in_range(self, target: Dict[str, int], range_coords: Dict) -> bool:
         """Check if target coordinates fall within the given range."""
         try:
-            from_coords = range_coords['from']
-            to_coords = range_coords['to']
+            from_coords = range_coords["from"]
+            to_coords = range_coords["to"]
 
-            return (from_coords['col'] <= target['col'] <= to_coords['col'] and
-                    from_coords['row'] <= target['row'] <= to_coords['row'])
+            return (
+                from_coords["col"] <= target["col"] <= to_coords["col"]
+                and from_coords["row"] <= target["row"] <= to_coords["row"]
+            )
         except (KeyError, TypeError):
             return False
 
@@ -588,7 +772,9 @@ class ExcelProcessor:
             cell_range_obj = worksheet[cell_range]
 
             # Handle single cell vs range
-            if hasattr(cell_range_obj, '__iter__') and not isinstance(cell_range_obj, str):
+            if hasattr(cell_range_obj, "__iter__") and not isinstance(
+                cell_range_obj, str
+            ):
                 return [[cell.value for cell in row] for row in cell_range_obj]
             else:
                 return [[cell_range_obj.value]]
@@ -596,132 +782,157 @@ class ExcelProcessor:
         except Exception as e:
             raise ExcelProcessingError(f"Failed to get range values: {e}")
 
-    def to_dataframe(self, sheet_name: str, header_row: Optional[int] = None) -> pd.DataFrame:
+    def to_dataframe(
+        self, sheet_name: str, header_row: Optional[int] = None
+    ) -> pd.DataFrame:
         """Convert Excel sheet to pandas DataFrame."""
         try:
-            df = pd.read_excel(
-                self.file_path,
-                sheet_name=sheet_name,
-                header=header_row
-            )
+            df = pd.read_excel(self.file_path, sheet_name=sheet_name, header=header_row)
             return df
 
         except Exception as e:
             raise ExcelProcessingError(f"Failed to convert to DataFrame: {e}")
 
-    def get_image_summary(self, images: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+    def get_image_summary(
+        self, images: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
         """Get summary information about extracted images."""
         summary = {
-            'total_images': 0,
-            'sheets_with_images': 0,
-            'images_by_sheet': {},
-            'position_summary': {
-                'with_position': 0,
-                'without_position': 0,
-                'position_types': {}
-            }
+            "total_images": 0,
+            "sheets_with_images": 0,
+            "images_by_sheet": {},
+            "position_summary": {
+                "with_position": 0,
+                "without_position": 0,
+                "position_types": {},
+            },
         }
 
         for sheet_name, sheet_images in images.items():
             if sheet_images:
-                summary['sheets_with_images'] += 1
-                summary['images_by_sheet'][sheet_name] = len(sheet_images)
-                summary['total_images'] += len(sheet_images)
+                summary["sheets_with_images"] += 1
+                summary["images_by_sheet"][sheet_name] = len(sheet_images)
+                summary["total_images"] += len(sheet_images)
 
                 for image_info in sheet_images:
-                    position = image_info.get('position', {})
-                    if position.get('estimated_cell'):
-                        summary['position_summary']['with_position'] += 1
-                        anchor_type = position.get('anchor_type', 'unknown')
-                        summary['position_summary']['position_types'][anchor_type] = \
-                            summary['position_summary']['position_types'].get(anchor_type, 0) + 1
+                    position = image_info.get("position", {})
+                    if position.get("estimated_cell"):
+                        summary["position_summary"]["with_position"] += 1
+                        anchor_type = position.get("anchor_type", "unknown")
+                        summary["position_summary"]["position_types"][anchor_type] = (
+                            summary["position_summary"]["position_types"].get(
+                                anchor_type, 0
+                            )
+                            + 1
+                        )
                     else:
-                        summary['position_summary']['without_position'] += 1
+                        summary["position_summary"]["without_position"] += 1
 
         return summary
 
-    def link_images_to_table(self, extracted_data: Dict[str, Any], images: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+    def link_images_to_table(
+        self, extracted_data: Dict[str, Any], images: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
         """Link extracted images to their corresponding rows in the image search table.
-        
+
         This method maps images to the image search table rows based on their position
         in the Excel sheet, replacing the image cell value with the path to the extracted image.
-        
+
         Args:
             extracted_data: The data extracted from Excel sheets
             images: Dictionary of extracted images with position information
-            
+
         Returns:
             Updated extracted data with image paths linked to table rows
         """
         if not images:
             return extracted_data
-        
+
         # Create a deep copy to avoid modifying the original data
         import copy
+
         result = copy.deepcopy(extracted_data)
-        
+
         # Process each sheet
         for sheet_name, sheet_data in result.items():
             # Get the original sheet name (before normalization)
-            original_sheet_names = [name for name in images.keys() 
-                                if normalize_column_name(name) == sheet_name]
-            
+            original_sheet_names = [
+                name
+                for name in images.keys()
+                if normalize_column_name(name) == sheet_name
+            ]
+
             if not original_sheet_names:
-                logger.debug(f"No matching original sheet name found for normalized name '{sheet_name}'")
+                logger.debug(
+                    f"No matching original sheet name found for normalized name '{sheet_name}'"
+                )
                 continue
-                
+
             original_sheet_name = original_sheet_names[0]
             sheet_images = images.get(original_sheet_name, [])
-            
-            logger.debug(f"Found original sheet name '{original_sheet_name}' for normalized name '{sheet_name}'")
-            
+
+            logger.debug(
+                f"Found original sheet name '{original_sheet_name}' for normalized name '{sheet_name}'"
+            )
+
             if not sheet_images:
                 logger.debug(f"No images found for sheet '{original_sheet_name}'")
                 continue
-            
+
             # Check for image_search table
-            if 'image_search' in sheet_data and isinstance(sheet_data['image_search'], list):
-                image_search_table = sheet_data['image_search']
-                
+            if "image_search" in sheet_data and isinstance(
+                sheet_data["image_search"], list
+            ):
+                image_search_table = sheet_data["image_search"]
+
                 # Map row numbers to images based on position
                 row_to_image = {}
                 for img in sheet_images:
-                    if 'position' in img and 'coordinates' in img['position']:
-                        row_num = img['position']['coordinates']['from']['row']
-                        
+                    if "position" in img and "coordinates" in img["position"]:
+                        row_num = img["position"]["coordinates"]["from"]["row"]
+
                         # Always include base64 data in the image reference
                         image_data = {
-                            'base64': img['image_base64'],  # Always include base64 data
+                            "base64": img["image_base64"],  # Always include base64 data
                         }
-                        
+
                         # Include path if it exists (for debugging/logging)
-                        if 'path' in img and os.path.exists(img['path']):
-                            image_data['path'] = img['path']
-                        
+                        if "path" in img and os.path.exists(img["path"]):
+                            image_data["path"] = img["path"]
+
                         row_to_image[row_num] = image_data
-                        logger.debug(f"Mapped image at row {row_num} to data with base64 content")
-                
+                        logger.debug(
+                            f"Mapped image at row {row_num} to data with base64 content"
+                        )
+
                 # Sort images by row number
                 sorted_rows = sorted(row_to_image.keys())
-                
+
                 # Link images to table rows
                 for i, row_data in enumerate(image_search_table):
                     if i < len(sorted_rows):
-                        row_data['image'] = row_to_image[sorted_rows[i]]
-                        logger.debug(f"Linked image at Excel row {sorted_rows[i]} to table row {i}")
-        
+                        row_data["image"] = row_to_image[sorted_rows[i]]
+                        logger.debug(
+                            f"Linked image at Excel row {sorted_rows[i]} to table row {i}"
+                        )
+
         return result
 
-    def extract_single_sheet(self, sheet_name: str, config: Optional[Dict] = None, 
-                             auto_detect: bool = True, max_rows: Optional[int] = None) -> Dict[str, Any]:
+    def extract_single_sheet(
+        self,
+        sheet_name: str,
+        config: Optional[Dict] = None,
+        auto_detect: bool = True,
+        max_rows: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Extract data from a single specified sheet with auto-detection support.
-        
+
         Args:
             sheet_name: Name of the Excel sheet to process
             config: Optional extraction configuration
             auto_detect: Whether to auto-detect structure when no config provided
             max_rows: Optional maximum number of rows to extract
-            
+
         Returns:
             Dictionary containing extracted data and metadata
         """
@@ -731,108 +942,114 @@ class ExcelProcessor:
             raise ValidationError(
                 f"Sheet '{sheet_name}' not found. Available sheets: {available_sheets}"
             )
-        
+
         worksheet = self.workbook[sheet_name]
-        
+
         # Create or use provided configuration
         if config is None and auto_detect:
             logger.info(f"Auto-detecting structure for sheet: {sheet_name}")
             # If max_rows is None, we want to scan all rows
             scan_all_rows = max_rows is None
-            detection_config = self._auto_detect_sheet_structure(worksheet, scan_all_rows=scan_all_rows)
+            detection_config = self._auto_detect_sheet_structure(
+                worksheet, scan_all_rows=scan_all_rows
+            )
             extraction_method = "auto_detect"
         elif config:
             detection_config = config
             extraction_method = "config_based"
         else:
             raise ValidationError("Either provide a config or enable auto_detect")
-        
+
         # Apply max_rows limit to configuration if specified
         # If max_rows is None, ensure we extract all rows
         if max_rows is not None:
             self._apply_max_rows_to_config(detection_config, max_rows)
-            logger.info(f"Applied max_rows limit of {max_rows} to extraction configuration")
+            logger.info(
+                f"Applied max_rows limit of {max_rows} to extraction configuration"
+            )
         else:
             # Ensure we extract all rows when max_rows is not specified
             self._apply_extract_all_rows(detection_config, worksheet.max_row)
             logger.info(f"Configured to extract all rows (up to {worksheet.max_row})")
-        
+
         # Extract data using the configuration
         sheet_config = {sheet_name: detection_config}
         extracted_data = self.extract_data({}, sheet_config)
-        
+
         # Extract images from the sheet
-        session_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'temp')
+        session_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp")
         os.makedirs(session_dir, exist_ok=True)
         images = self.extract_images(session_dir)
-        
+
         # Link images to extracted data
         if images and sheet_name in images:
             normalized_sheet_name = normalize_column_name(sheet_name)
             sheet_data = extracted_data.get(normalized_sheet_name, {})
-            
+
             # Find all subtables in the extracted data
             for subtable_name, subtable_data in sheet_data.items():
                 if isinstance(subtable_data, list) and subtable_data:
                     # This is a table-like structure, link images to rows
                     self._link_images_to_rows(subtable_data, images[sheet_name])
-        
+
         # Get sheet metadata
         metadata = self._get_sheet_metadata(
-            worksheet, 
-            detection_config, 
+            worksheet,
+            detection_config,
             extraction_method,
-            extracted_data.get(normalize_column_name(sheet_name), {})
+            extracted_data.get(normalize_column_name(sheet_name), {}),
         )
-        
+
         return {
-            'data': extracted_data.get(normalize_column_name(sheet_name), {}),
-            'metadata': metadata
+            "data": extracted_data.get(normalize_column_name(sheet_name), {}),
+            "metadata": metadata,
         }
-        
+
     def _apply_max_rows_to_config(self, config: Dict[str, Any], max_rows: int) -> None:
         """Apply max_rows limit to all subtables in the configuration."""
-        if 'subtables' not in config:
+        if "subtables" not in config:
             return
-            
-        for subtable in config['subtables']:
-            if 'data_extraction' in subtable:
+
+        for subtable in config["subtables"]:
+            if "data_extraction" in subtable:
                 # Only apply to table type subtables (not key_value_pairs)
-                if subtable.get('type', 'table') == 'table':
-                    subtable['data_extraction']['max_rows'] = max_rows
-    
-    def _apply_extract_all_rows(self, config: Dict[str, Any], max_sheet_rows: int) -> None:
+                if subtable.get("type", "table") == "table":
+                    subtable["data_extraction"]["max_rows"] = max_rows
+
+    def _apply_extract_all_rows(
+        self, config: Dict[str, Any], max_sheet_rows: int
+    ) -> None:
         """Configure extraction to include all rows in the sheet."""
-        if 'subtables' not in config:
+        if "subtables" not in config:
             return
-            
-        for subtable in config['subtables']:
-            if 'data_extraction' in subtable:
+
+        for subtable in config["subtables"]:
+            if "data_extraction" in subtable:
                 # Only apply to table type subtables (not key_value_pairs)
-                if subtable.get('type', 'table') == 'table':
+                if subtable.get("type", "table") == "table":
                     # Set max_rows to the maximum number of rows in the sheet
                     # Add a buffer to ensure we get everything
-                    subtable['data_extraction']['max_rows'] = max_sheet_rows + 10
-    
-    def _link_images_to_rows(self, rows: List[Dict[str, Any]], images: List[Dict[str, Any]]) -> None:
+                    subtable["data_extraction"]["max_rows"] = max_sheet_rows + 10
+
+    def _link_images_to_rows(
+        self, rows: List[Dict[str, Any]], images: List[Dict[str, Any]]
+    ) -> None:
         """Link images to data rows based on position information."""
         if not images or not rows:
             return
-            
+
         # Create a mapping of row numbers to images
         row_to_image = {}
         for img in images:
-            if 'position' in img and 'coordinates' in img['position']:
-                row_num = img['position']['coordinates']['from']['row']
-                row_to_image[row_num] = {
-                    'base64': img['image_base64']
-                }
-                if 'path' in img:
-                    row_to_image[row_num]['path'] = img['path']
-        
+            if "position" in img and "coordinates" in img["position"]:
+                row_num = img["position"]["coordinates"]["from"]["row"]
+                row_to_image[row_num] = {"base64": img["image_base64"]}
+                if "path" in img:
+                    row_to_image[row_num]["path"] = img["path"]
+
         # Sort images by row number
         sorted_rows = sorted(row_to_image.keys())
-        
+
         # Assign images to data rows where appropriate
         # This is a simple heuristic - we assume images are in order with data rows
         for i, row_data in enumerate(rows):
@@ -841,89 +1058,112 @@ class ExcelProcessor:
                 for field, value in row_data.items():
                     # Look for image fields (either by field type or by field name)
                     is_image_field = False
-                    
+
                     # Check field types metadata if available
-                    if '_field_types' in row_data and field in row_data['_field_types']:
-                        is_image_field = row_data['_field_types'][field] == 'image'
-                    
+                    if "_field_types" in row_data and field in row_data["_field_types"]:
+                        is_image_field = row_data["_field_types"][field] == "image"
+
                     # Also check by common image field names
-                    if not is_image_field and field.lower() in ('image', 'logo', 'picture', 'photo'):
+                    if not is_image_field and field.lower() in (
+                        "image",
+                        "logo",
+                        "picture",
+                        "photo",
+                    ):
                         is_image_field = True
-                    
+
                     if is_image_field:
                         # This is an image field, assign the image data
                         row_data[field] = row_to_image[sorted_rows[i]]
                         break
-                
+
                 # If no explicit image field was found but we have an image, add it to an 'image' field
-                if 'image' not in row_data:
-                    row_data['image'] = row_to_image[sorted_rows[i]]
-    
-    def _get_sheet_metadata(self, worksheet: Worksheet, config: Dict, 
-                           method: str, extracted_data: Dict[str, Any]) -> Dict[str, Any]:
+                if "image" not in row_data:
+                    row_data["image"] = row_to_image[sorted_rows[i]]
+
+    def _get_sheet_metadata(
+        self,
+        worksheet: Worksheet,
+        config: Dict,
+        method: str,
+        extracted_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
         """Get metadata about the processed sheet."""
-        
+
         types_detected = []
-        for subtable in config.get('subtables', []):
-            subtable_type = subtable.get('type', 'unknown')
+        for subtable in config.get("subtables", []):
+            subtable_type = subtable.get("type", "unknown")
             if subtable_type not in types_detected:
                 types_detected.append(subtable_type)
-        
+
         # Count extracted rows
         extracted_rows = 0
         for subtable_name, subtable_data in extracted_data.items():
             if isinstance(subtable_data, list):
                 extracted_rows += len(subtable_data)
-        
+
         return {
-            'total_rows': worksheet.max_row,
-            'extracted_rows': extracted_rows,
-            'total_columns': worksheet.max_column,
-            'method': method,
-            'types': types_detected,
-            'subtables_detected': len(config.get('subtables', []))
+            "total_rows": worksheet.max_row,
+            "extracted_rows": extracted_rows,
+            "total_columns": worksheet.max_column,
+            "method": method,
+            "types": types_detected,
+            "subtables_detected": len(config.get("subtables", [])),
         }
 
-    def cleanup_images(self, images: Dict[str, List[Dict[str, Any]]], config: Dict[str, Any] = None) -> None:
+    def cleanup_images(
+        self, images: Dict[str, List[Dict[str, Any]]], config: Dict[str, Any] = None
+    ) -> None:
         """Clean up extracted images based on configuration.
-        
+
         Args:
             images: Dictionary of extracted images by sheet name
             config: Configuration dictionary with image storage settings
         """
         if not images:
             return
-            
+
         # Get app configuration to determine environment
         from .config_manager import ConfigManager
+
         config_manager = ConfigManager()
         app_config = config_manager.get_app_config()
-        development_mode = app_config.get('development_mode', False)
-        
+        development_mode = app_config.get("development_mode", False)
+
         # Determine if we should clean up images
         if config is None:
             config = {}
-            
+
         cleanup = False
         if development_mode:
-            cleanup = config.get('image_storage', {}).get('development_mode', {}).get('cleanup_after_merge', False)
+            cleanup = (
+                config.get("image_storage", {})
+                .get("development_mode", {})
+                .get("cleanup_after_merge", False)
+            )
         else:
-            cleanup = config.get('image_storage', {}).get('production_mode', {}).get('cleanup_after_merge', True)
-        
+            cleanup = (
+                config.get("image_storage", {})
+                .get("production_mode", {})
+                .get("cleanup_after_merge", True)
+            )
+
         if not cleanup:
             logger.debug("Image cleanup skipped based on configuration")
             return
-            
+
         # Delete image files
         for sheet_name, sheet_images in images.items():
             for img in sheet_images:
                 try:
-                    if 'path' in img and os.path.exists(img['path']):
-                        os.remove(img['path'])
+                    if "path" in img and os.path.exists(img["path"]):
+                        os.remove(img["path"])
                         logger.debug(f"Deleted image: {img['path']}")
                 except Exception as e:
-                    logger.warning(f"Failed to delete image {img.get('path', 'unknown')}: {e}")
-                    
+                    logger.warning(
+                        f"Failed to delete image {img.get('path', 'unknown')}: {e}"
+                    )
+
         logger.info("Image cleanup completed")
 
     def close(self) -> None:
@@ -932,12 +1172,16 @@ class ExcelProcessor:
             self.workbook.close()
             self.workbook = None
 
+        # Clean up memory file and image cache
+        self._memory_file = None
+        self._image_cache = {}
+
     def _detect_image_format(self, image_data: bytes) -> str:
         """Detect image format from binary data.
-        
+
         Args:
             image_data: Binary image data
-            
+
         Returns:
             Image format as a string (e.g., 'png', 'jpg')
         """
@@ -949,77 +1193,79 @@ class ExcelProcessor:
                     return pil_image.format.lower()
                 else:
                     logger.warning("Could not detect image format, defaulting to png")
-                    return 'png'
+                    return "png"
         except Exception as e:
             logger.error(f"Error detecting image format: {e}")
-            return 'png'  # Default to PNG
+            return "png"  # Default to PNG
 
     def _encode_image_as_base64(self, image_data: bytes, img_format: str) -> str:
         """Encode image data as base64 string with proper MIME type.
-        
+
         Args:
             image_data: Binary image data
             img_format: Image format (e.g., 'png', 'jpeg')
-            
+
         Returns:
             Base64 encoded string with data URI prefix
         """
         try:
             # Normalize format for MIME type
             mime_format = img_format.lower()
-            if mime_format == 'jpg':
-                mime_format = 'jpeg'
-                
+            if mime_format == "jpg":
+                mime_format = "jpeg"
+
             # Define MIME type mapping
             mime_types = {
-                'png': 'image/png',
-                'jpeg': 'image/jpeg',
-                'gif': 'image/gif',
-                'webp': 'image/webp',
-                'bmp': 'image/bmp',
-                'tiff': 'image/tiff'
+                "png": "image/png",
+                "jpeg": "image/jpeg",
+                "gif": "image/gif",
+                "webp": "image/webp",
+                "bmp": "image/bmp",
+                "tiff": "image/tiff",
             }
-            
-            mime_type = mime_types.get(mime_format, 'image/png')
-            
+
+            mime_type = mime_types.get(mime_format, "image/png")
+
             # Encode to base64
-            base64_encoded = base64.b64encode(image_data).decode('utf-8')
-            
+            base64_encoded = base64.b64encode(image_data).decode("utf-8")
+
             # Return data URI
             return f"data:{mime_type};base64,{base64_encoded}"
-            
+
         except Exception as e:
             logger.error(f"Error encoding image as base64: {e}")
             # Return empty data URI as fallback
             return "data:image/png;base64,"
 
-    def _normalize_image_filename(self, sheet_name: str, idx: int, format_name: str) -> str:
+    def _normalize_image_filename(
+        self, sheet_name: str, idx: int, format_name: str
+    ) -> str:
         """Normalize image filename for consistency and reliability."""
         # Normalize sheet name: lowercase, replace spaces with underscores, remove special chars
-        normalized_sheet = re.sub(r'[^\w_]', '', sheet_name.lower().replace(' ', '_'))
+        normalized_sheet = re.sub(r"[^\w_]", "", sheet_name.lower().replace(" ", "_"))
         # Ensure format is lowercase and without leading dot
-        format_lower = format_name.lower().lstrip('.')
+        format_lower = format_name.lower().lstrip(".")
         # Create normalized filename
         return f"{normalized_sheet}_image_{idx}.{format_lower}"
 
     def _extract_image_position(self, img) -> Dict[str, Any]:
         """Extract position information from image object."""
         position_info = {
-            'anchor_type': None,
-            'from_cell': None,
-            'to_cell': None,
-            'coordinates': None,
-            'estimated_cell': None,
-            'size_info': None
+            "anchor_type": None,
+            "from_cell": None,
+            "to_cell": None,
+            "coordinates": None,
+            "estimated_cell": None,
+            "size_info": None,
         }
 
         try:
-            if hasattr(img, 'anchor'):
+            if hasattr(img, "anchor"):
                 anchor = img.anchor
-                position_info['anchor_type'] = type(anchor).__name__
+                position_info["anchor_type"] = type(anchor).__name__
 
                 # Two-cell anchor (most common)
-                if hasattr(anchor, '_from') and hasattr(anchor, 'to'):
+                if hasattr(anchor, "_from") and hasattr(anchor, "to"):
                     from_info = anchor._from
                     to_info = anchor.to
 
@@ -1029,75 +1275,85 @@ class ExcelProcessor:
                     to_col = get_column_letter(to_info.col + 1)
                     to_cell = f"{to_col}{to_info.row + 1}"
 
-                    position_info.update({
-                        'from_cell': from_cell,
-                        'to_cell': to_cell,
-                        'coordinates': {
-                            'from': {'col': from_info.col, 'row': from_info.row},
-                            'to': {'col': to_info.col, 'row': to_info.row}
+                    position_info.update(
+                        {
+                            "from_cell": from_cell,
+                            "to_cell": to_cell,
+                            "coordinates": {
+                                "from": {"col": from_info.col, "row": from_info.row},
+                                "to": {"col": to_info.col, "row": to_info.row},
+                            },
                         }
-                    })
+                    )
 
                     # Use from_cell as the primary estimated position
-                    position_info['estimated_cell'] = from_cell
+                    position_info["estimated_cell"] = from_cell
 
                     # Calculate span information
                     col_span = to_info.col - from_info.col + 1
                     row_span = to_info.row - from_info.row + 1
-                    position_info['size_info'] = {
-                        'column_span': col_span,
-                        'row_span': row_span
+                    position_info["size_info"] = {
+                        "column_span": col_span,
+                        "row_span": row_span,
                     }
 
                 # One-cell anchor
-                elif hasattr(anchor, '_from'):
+                elif hasattr(anchor, "_from"):
                     from_info = anchor._from
                     from_col = get_column_letter(from_info.col + 1)
                     from_cell = f"{from_col}{from_info.row + 1}"
 
-                    position_info.update({
-                        'from_cell': from_cell,
-                        'estimated_cell': from_cell,
-                        'coordinates': {
-                            'from': {'col': from_info.col, 'row': from_info.row}
+                    position_info.update(
+                        {
+                            "from_cell": from_cell,
+                            "estimated_cell": from_cell,
+                            "coordinates": {
+                                "from": {"col": from_info.col, "row": from_info.row}
+                            },
                         }
-                    })
+                    )
 
-                    position_info['size_info'] = {
-                        'column_span': 1,
-                        'row_span': 1
-                    }
+                    position_info["size_info"] = {"column_span": 1, "row_span": 1}
 
         except Exception as e:
             logger.debug(f"Could not extract detailed position info: {e}")
             # Fallback to basic position estimation
-            position_info['estimated_cell'] = 'A1'  # Default fallback
-            position_info['size_info'] = {'column_span': 1, 'row_span': 1}
+            position_info["estimated_cell"] = "A1"  # Default fallback
+            position_info["size_info"] = {"column_span": 1, "row_span": 1}
 
         return position_info
 
-    def _auto_detect_sheet_structure(self, worksheet: Worksheet, scan_all_rows: bool = False) -> Dict[str, Any]:
+    def _auto_detect_sheet_structure(
+        self, worksheet: Worksheet, scan_all_rows: bool = False
+    ) -> Dict[str, Any]:
         """Auto-detect data structure in worksheet.
-        
+
         Args:
             worksheet: The worksheet to analyze
             scan_all_rows: If True, scan all rows in the worksheet instead of limiting
         """
-        
+
         # Scan worksheet to find data patterns
         data_regions = self._scan_data_regions(worksheet, scan_all_rows=scan_all_rows)
-        
+
         subtables = []
         for region in data_regions:
-            subtable_config = self._create_subtable_config(worksheet, region, scan_all_rows=scan_all_rows)
+            subtable_config = self._create_subtable_config(
+                worksheet, region, scan_all_rows=scan_all_rows
+            )
             if subtable_config:
                 subtables.append(subtable_config)
-        
+
         return {"subtables": subtables}
 
-    def _scan_data_regions(self, worksheet: Worksheet, max_scan_rows: int = 100, scan_all_rows: bool = False) -> List[Dict]:
+    def _scan_data_regions(
+        self,
+        worksheet: Worksheet,
+        max_scan_rows: int = 100,
+        scan_all_rows: bool = False,
+    ) -> List[Dict]:
         """Scan worksheet to identify distinct data regions.
-        
+
         Args:
             worksheet: The worksheet to analyze
             max_scan_rows: Maximum number of rows to scan if scan_all_rows is False
@@ -1105,143 +1361,172 @@ class ExcelProcessor:
         """
         regions = []
         used_rows = set()  # Track rows already part of a region
-        
+
         # Determine how many rows to scan
-        rows_to_scan = worksheet.max_row if scan_all_rows else min(max_scan_rows, worksheet.max_row)
-        
+        rows_to_scan = (
+            worksheet.max_row
+            if scan_all_rows
+            else min(max_scan_rows, worksheet.max_row)
+        )
+
         # Simple algorithm: look for header-like patterns
         for row in range(1, rows_to_scan + 1):
             # Skip if this row is already part of another region
             if row in used_rows:
                 continue
-                
+
             # Check if this row looks like headers
-            row_cells = [worksheet.cell(row=row, column=col).value 
-                        for col in range(1, min(20, worksheet.max_column + 1))]
-            
+            row_cells = [
+                worksheet.cell(row=row, column=col).value
+                for col in range(1, min(20, worksheet.max_column + 1))
+            ]
+
             # Filter non-empty cells
             non_empty = [cell for cell in row_cells if cell is not None]
-            
+
             if len(non_empty) >= 2:  # Potential header row
                 # Analyze the pattern below this row
-                region_info = self._analyze_region_below(worksheet, row, len(non_empty), scan_all_rows=scan_all_rows)
-                if region_info and region_info['rows'] > 0:
-                    regions.append({
-                        'header_row': row,
-                        'header_col': 1,
-                        'type': region_info['type'],
-                        'rows': region_info['rows'],
-                        'cols': region_info['cols']
-                    })
-                    
+                region_info = self._analyze_region_below(
+                    worksheet, row, len(non_empty), scan_all_rows=scan_all_rows
+                )
+                if region_info and region_info["rows"] > 0:
+                    regions.append(
+                        {
+                            "header_row": row,
+                            "header_col": 1,
+                            "type": region_info["type"],
+                            "rows": region_info["rows"],
+                            "cols": region_info["cols"],
+                        }
+                    )
+
                     # Mark rows as used to avoid overlapping regions
-                    for r in range(row, row + region_info['rows'] + 1):
+                    for r in range(row, row + region_info["rows"] + 1):
                         used_rows.add(r)
-        
+
         # Prioritize larger regions and tables over key-value pairs
-        regions.sort(key=lambda x: (x['type'] == 'table', x['rows'] * x['cols']), reverse=True)
-        
+        regions.sort(
+            key=lambda x: (x["type"] == "table", x["rows"] * x["cols"]), reverse=True
+        )
+
         # Return only the best region to avoid confusion
         return regions[:1] if regions else []
 
-    def _analyze_region_below(self, worksheet: Worksheet, header_row: int, 
-                             header_cols: int, scan_all_rows: bool = False) -> Optional[Dict]:
+    def _analyze_region_below(
+        self,
+        worksheet: Worksheet,
+        header_row: int,
+        header_cols: int,
+        scan_all_rows: bool = False,
+    ) -> Optional[Dict]:
         """Analyze data pattern below a potential header row.
-        
+
         Args:
             worksheet: The worksheet to analyze
             header_row: Row number of the potential header
             header_cols: Number of columns in the header
             scan_all_rows: If True, scan all rows in the worksheet
         """
-        
+
         # Look at rows below to determine pattern
         data_rows = 0
         consistent_structure = True
-        
+
         # Determine max rows to scan
-        max_rows_to_scan = worksheet.max_row if scan_all_rows else min(header_row + 50, worksheet.max_row)
-        
+        max_rows_to_scan = (
+            worksheet.max_row
+            if scan_all_rows
+            else min(header_row + 50, worksheet.max_row)
+        )
+
         for row in range(header_row + 1, max_rows_to_scan + 1):
-            row_data = [worksheet.cell(row=row, column=col).value 
-                       for col in range(1, header_cols + 1)]
-            
+            row_data = [
+                worksheet.cell(row=row, column=col).value
+                for col in range(1, header_cols + 1)
+            ]
+
             non_empty_count = sum(1 for cell in row_data if cell is not None)
-            
+
             # If we find an empty row after some data rows, consider it the end of the data region
             # unless we're scanning all rows, in which case we continue past empty rows
             if non_empty_count == 0 and data_rows > 0 and not scan_all_rows:
                 break  # End of data
-            
+
             if non_empty_count > 0:  # Only count non-empty rows
                 data_rows += 1
-                
+
                 # Check if structure is consistent with table format
                 if non_empty_count < header_cols * 0.3:  # Less than 30% filled
                     consistent_structure = False
-        
+
         if data_rows >= 1:
             return {
-                'type': 'table' if consistent_structure and data_rows > 1 else 'key_value_pairs',
-                'rows': data_rows,
-                'cols': header_cols
+                "type": (
+                    "table"
+                    if consistent_structure and data_rows > 1
+                    else "key_value_pairs"
+                ),
+                "rows": data_rows,
+                "cols": header_cols,
             }
-        
+
         return None
 
-    def _create_subtable_config(self, worksheet: Worksheet, region: Dict, scan_all_rows: bool = False) -> Optional[Dict]:
+    def _create_subtable_config(
+        self, worksheet: Worksheet, region: Dict, scan_all_rows: bool = False
+    ) -> Optional[Dict]:
         """Create subtable configuration based on detected region.
-        
+
         Args:
             worksheet: The worksheet to analyze
             region: Region information from _scan_data_regions
             scan_all_rows: If True, configure to extract all rows
         """
-        
-        header_row = region['header_row']
-        header_col = region['header_col']
-        
+
+        header_row = region["header_row"]
+        header_col = region["header_col"]
+
         # Get headers
         headers = []
-        for col in range(header_col, header_col + region['cols']):
+        for col in range(header_col, header_col + region["cols"]):
             cell_value = worksheet.cell(row=header_row, column=col).value
             if cell_value:
                 headers.append(str(cell_value).strip())
-        
+
         if not headers:
             return None
-        
+
         # Create column mappings
         column_mappings = {}
         for header in headers:
             column_mappings[header] = normalize_column_name(header)
-        
+
         # Determine search text for this region
         search_text = headers[0] if headers else "Data"
-        
+
         # Determine max_rows based on scan_all_rows flag
-        max_rows = worksheet.max_row if scan_all_rows else region['rows'] + 10
-        
+        max_rows = worksheet.max_row if scan_all_rows else region["rows"] + 10
+
         config = {
             "name": f"auto_detected_{region['type']}_{header_row}",
-            "type": region['type'],
+            "type": region["type"],
             "header_search": {
                 "method": "contains_text",
                 "text": search_text,
                 "column": "A",
-                "search_range": f"A{max(1, header_row-2)}:A{header_row+2}"
+                "search_range": f"A{max(1, header_row-2)}:A{header_row+2}",
             },
             "data_extraction": {
                 "headers_row_offset": 0,
                 "data_row_offset": 1,
-                "max_columns": region['cols'],
+                "max_columns": region["cols"],
                 "max_rows": max_rows,
-                "column_mappings": column_mappings
-            }
+                "column_mappings": column_mappings,
+            },
         }
-        
+
         # Add orientation for key-value pairs
-        if region['type'] == 'key_value_pairs':
-            config['data_extraction']['orientation'] = 'horizontal'
-        
+        if region["type"] == "key_value_pairs":
+            config["data_extraction"]["orientation"] = "horizontal"
+
         return config

@@ -18,9 +18,19 @@ if [[ -z "$commit_message" ]]; then
   exit 1
 fi
 
-# Commit with the provided message
+# Ask if pre-commit checks should be run
+echo "🔍 Run pre-commit checks? (Y/n):"
+read -r run_checks
+
+# Commit with or without pre-commit checks based on user choice
 echo "✅ Committing changes..."
-git commit -m "$commit_message"
+if [[ "$run_checks" =~ ^[Nn]$ ]]; then
+  echo "⏩ Bypassing pre-commit checks..."
+  git commit -m "$commit_message" --no-verify
+else
+  echo "🧪 Running pre-commit checks..."
+  git commit -m "$commit_message"
+fi
 
 # Push to the current branch
 current_branch=$(git symbolic-ref --short HEAD)
