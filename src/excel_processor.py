@@ -533,7 +533,7 @@ class ExcelProcessor:
                         cell_embedded_info = self._check_for_cell_embedded_image(
                             cell, row, col
                         )
-                        
+
                         if cell_embedded_info:
                             # Cell likely contains embedded image that we can't extract
                             cell_value = cell_embedded_info
@@ -1104,10 +1104,10 @@ class ExcelProcessor:
         self, row: int, col: int, images: List[Dict]
     ) -> Optional[Dict]:
         """Get image data if there's an image at the specified cell position.
-        
+
         Args:
             row: 1-based row number from table extraction
-            col: 1-based column number from table extraction  
+            col: 1-based column number from table extraction
             images: List of image dictionaries with 0-based coordinates
         """
         for img in images:
@@ -1126,11 +1126,11 @@ class ExcelProcessor:
     ) -> Optional[Dict]:
         """Check if a cell likely contains an embedded image (detection only)."""
         from openpyxl.utils import get_column_letter
-        
+
         cell_ref = f"{get_column_letter(col)}{row}"
-        
+
         # Note: Complex extraction methods removed - detection only
-        
+
         # Check for various indicators of embedded content
         indicators = {
             "has_hyperlink": cell.hyperlink is not None,
@@ -1140,7 +1140,7 @@ class ExcelProcessor:
             "fill_type": cell.fill.fill_type if cell.fill else None,
             "font_name": cell.font.name if cell.font else None,
         }
-        
+
         # More specific detection for #VALUE! that might indicate images
         # Only treat as embedded image if it's specifically in keywords/images-related columns
         if isinstance(cell.value, str) and cell.value == "#VALUE!":
@@ -1148,30 +1148,29 @@ class ExcelProcessor:
             if col == 1:  # Column A (keywords_images column)
                 # Try to get more context about the cell
                 return {
-                    "type": "cell_embedded_image_placeholder", 
+                    "type": "cell_embedded_image_placeholder",
                     "message": "Embedded image detected (extraction not supported)",
                     "cell_ref": cell_ref,
                     "original_value": cell.value,
                     "extraction_status": "requires_manual_export",
                     "note": "Cell-embedded images can be manually exported from Excel using 'Save as Web Page' or similar methods",
-                    "suggested_workflow": "Export Excel as HTML or use specialized tools to extract embedded images"
+                    "suggested_workflow": "Export Excel as HTML or use specialized tools to extract embedded images",
                 }
             else:
                 # For #VALUE! in other columns, treat as formula error, not image
                 return None
-        
+
         # Check for cells that might contain "Picture" or similar indicators
         if isinstance(cell.value, str) and cell.value.lower() in ["picture", "image"]:
             return {
-                "type": "cell_embedded_image_placeholder", 
+                "type": "cell_embedded_image_placeholder",
                 "message": f"Cell contains '{cell.value}' indicating embedded image",
                 "cell_ref": cell_ref,
                 "original_value": cell.value,
-                "extraction_status": "not_available"
+                "extraction_status": "not_available",
             }
-            
-        return None
 
+        return None
 
     def _link_images_to_rows(
         self, rows: List[Dict[str, Any]], images: List[Dict[str, Any]]
@@ -1490,51 +1489,52 @@ class ExcelProcessor:
 
     def auto_detect_all_sheets(self) -> Dict[str, Any]:
         """Auto-detect data structure for all sheets in the workbook.
-        
+
         Returns:
             Dictionary with global_settings and sheet_configs for all sheets
         """
         try:
             logger.info("Auto-detecting structure for all sheets in workbook")
-            
+
             # Create minimal global settings for auto-detection
             global_settings = {
                 "image_extraction": {
                     "enabled": True,
                     "formats": ["png", "jpg", "jpeg", "gif", "webp"],
                     "save_format": "png",
-                    "cleanup_after_merge": True
+                    "cleanup_after_merge": True,
                 }
             }
-            
+
             # Auto-detect each sheet
             sheet_configs = {}
             for sheet_name in self.workbook.sheetnames:
                 logger.info(f"Auto-detecting structure for sheet: {sheet_name}")
                 worksheet = self.workbook[sheet_name]
-                
+
                 try:
                     # Use existing auto-detection logic with scan_all_rows=True
                     sheet_config = self._auto_detect_sheet_structure(
                         worksheet, scan_all_rows=True
                     )
                     sheet_configs[sheet_name] = sheet_config
-                    logger.debug(f"Auto-detected config for {sheet_name}: {sheet_config}")
+                    logger.debug(
+                        f"Auto-detected config for {sheet_name}: {sheet_config}"
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to auto-detect sheet '{sheet_name}': {e}")
                     # Continue with other sheets, don't fail completely
                     continue
-            
+
             if not sheet_configs:
                 raise ExcelProcessingError("Failed to auto-detect any sheet structures")
-            
-            logger.info(f"Successfully auto-detected structure for {len(sheet_configs)} sheets")
-            
-            return {
-                "global_settings": global_settings,
-                "sheet_configs": sheet_configs
-            }
-            
+
+            logger.info(
+                f"Successfully auto-detected structure for {len(sheet_configs)} sheets"
+            )
+
+            return {"global_settings": global_settings, "sheet_configs": sheet_configs}
+
         except Exception as e:
             logger.error(f"Auto-detection failed: {e}")
             raise ExcelProcessingError(f"Failed to auto-detect workbook structure: {e}")
@@ -1650,7 +1650,7 @@ class ExcelProcessor:
                 consecutive_empty_rows = 0  # Reset counter when we find data
                 data_rows += 1
 
-                # Check if structure is consistent with table format  
+                # Check if structure is consistent with table format
                 # Lowered threshold to 15% to better handle sparse table data
                 if non_empty_count < header_cols * 0.15:  # Less than 15% filled
                     consistent_structure = False
@@ -1660,7 +1660,9 @@ class ExcelProcessor:
             # Only use key_value_pairs for very sparse data (< 10% consistent)
             use_table = consistent_structure or data_rows >= 2
             detection_type = "table" if use_table else "key_value_pairs"
-            logger.debug(f"Detection result: data_rows={data_rows}, consistent={consistent_structure}, use_table={use_table}, type={detection_type}")
+            logger.debug(
+                f"Detection result: data_rows={data_rows}, consistent={consistent_structure}, use_table={use_table}, type={detection_type}"
+            )
             return {
                 "type": detection_type,
                 "rows": data_rows,

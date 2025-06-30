@@ -142,12 +142,12 @@ class PowerPointProcessor:
         try:
             # Process each slide
             for slide_idx, slide in enumerate(self.presentation.slides):
-                logger.debug(f"Processing slide {slide_idx + 1}")
+                # logger.debug(f"Processing slide {slide_idx + 1}")  # Too verbose
                 self._process_slide(slide, data, images)
 
             # Validate and clean up before saving
             self._validate_presentation_integrity()
-            
+
             # Save the merged presentation
             self.presentation.save(output_path)
             logger.info(f"Merged presentation saved to: {output_path}")
@@ -196,9 +196,9 @@ class PowerPointProcessor:
             if not shape.text_frame:
                 return
 
-            # First check if this might be an image placeholder
+            # Check if this shape contains any image fields (based on configuration, not just field names)
             shape_text = self._get_full_text_from_shape(shape)
-            if shape_text and self._is_image_placeholder(shape_text):
+            if shape_text and self._contains_image_field(shape_text, data):
                 # Try to replace with image first
                 if self._try_replace_text_with_image(shape, data, images):
                     return  # Successfully replaced with image, skip text processing
@@ -302,11 +302,28 @@ class PowerPointProcessor:
         field_type = self._get_field_type(field_name, data)
         return field_type == "image"
 
-    def _is_image_placeholder(self, text_content: str) -> bool:
-        """Check if text content is an image placeholder.
+    def _contains_image_field(self, text_content: str, data: Dict[str, Any]) -> bool:
+        """Check if text content contains any image fields based on configuration."""
+        if not text_content:
+            return False
 
-        Now uses field type information when available, falling back to
-        heuristic detection only when necessary.
+        # Extract merge fields
+        merge_fields = validate_merge_fields(text_content)
+        if not merge_fields:
+            return False
+
+        # Check if any field is configured as an image field
+        for field in merge_fields:
+            if self._is_image_field(field, data):
+                return True
+
+        return False
+
+    def _is_image_placeholder(self, text_content: str) -> bool:
+        """Legacy method - check if text content is an image placeholder.
+
+        This method is kept for backward compatibility but should use
+        _contains_image_field() when data is available.
         """
         if not text_content:
             return False
@@ -316,10 +333,14 @@ class PowerPointProcessor:
         if not merge_fields:
             return False
 
-        # We'll check the field type when we have the data
-        # For now, just return True if it looks like an image placeholder
-        # This will be refined when we have the actual data and field types
-        return any("image" in field.lower() for field in merge_fields)
+        # Fallback heuristic: check if field name contains image-related keywords
+        return any(
+            "image" in field.lower()
+            or "img" in field.lower()
+            or "photo" in field.lower()
+            or "picture" in field.lower()
+            for field in merge_fields
+        )
 
     def _get_image_for_field(
         self,
@@ -518,21 +539,25 @@ class PowerPointProcessor:
             height = shape.height
 
             # Store shape properties before removal
-            shape_name = getattr(shape, 'name', 'Unknown')
-            
+            shape_name = getattr(shape, "name", "Unknown")
+
             # Clear the text from the shape to prepare for replacement
             if hasattr(shape, "text_frame") and shape.text_frame:
                 try:
                     shape.text_frame.clear()  # Use proper API method
-                    logger.debug(f"Cleared text from shape '{shape_name}' before replacement")
+                    logger.debug(
+                        f"Cleared text from shape '{shape_name}' before replacement"
+                    )
                 except Exception as text_err:
-                    logger.warning(f"Could not clear text from shape '{shape_name}': {text_err}")
+                    logger.warning(
+                        f"Could not clear text from shape '{shape_name}': {text_err}"
+                    )
 
             # Use python-pptx API for safer shape removal
             try:
                 # Get slide reference
                 slide_shapes = slide.shapes
-                
+
                 # Find and remove the shape using the proper API
                 for i, slide_shape in enumerate(slide_shapes):
                     if slide_shape == shape:
@@ -540,21 +565,25 @@ class PowerPointProcessor:
                         del slide_shapes[i]
                         logger.debug(f"Safely removed shape '{shape_name}' from slide")
                         break
-                        
+
             except Exception as removal_err:
-                logger.warning(f"Could not remove shape using API, trying XML method: {removal_err}")
-                
+                logger.warning(
+                    f"Could not remove shape using API, trying XML method: {removal_err}"
+                )
+
                 # Fallback to XML method if API fails
                 try:
                     shape_id = shape.shape_id
                     sp_tree = slide.shapes._spTree
-                    
+
                     for sp in sp_tree.findall(".//{*}sp"):
                         if sp.get("id") == str(shape_id):
                             sp_tree.remove(sp)
-                            logger.debug(f"Removed shape '{shape_name}' using XML fallback")
+                            logger.debug(
+                                f"Removed shape '{shape_name}' using XML fallback"
+                            )
                             break
-                            
+
                 except Exception as xml_err:
                     logger.error(f"Failed to remove shape '{shape_name}': {xml_err}")
                     return False
@@ -656,7 +685,7 @@ class PowerPointProcessor:
 
                 # Replace the field in the runs
                 self._replace_field_in_runs(paragraph, field_info, field_value_str)
-            
+
             # Clean up any empty runs that might cause PowerPoint issues
             self._cleanup_empty_runs(paragraph)
 
@@ -824,9 +853,7 @@ class PowerPointProcessor:
 
             # Update the run text (formatting is preserved automatically)
             run.text = new_text
-            logger.debug(
-                f"Replaced field in single run: '{original_text}' -> '{new_text}'"
-            )
+            # logger.debug(f"Replaced field in single run: '{original_text}' -> '{new_text}'")  # Too verbose
 
         except Exception as e:
             logger.warning(f"Failed to replace field in single run: {e}")
@@ -882,7 +909,7 @@ class PowerPointProcessor:
                     if run.text.strip():  # Only clear if there was actual content
                         run.text = ""
 
-            logger.debug(f"Replaced field across {len(affected_runs)} runs")
+            # logger.debug(f"Replaced field across {len(affected_runs)} runs")  # Too verbose
 
         except Exception as e:
             logger.warning(f"Failed to replace field across runs: {e}")
@@ -909,7 +936,7 @@ class PowerPointProcessor:
                 if source_font.color.rgb:
                     target_font.color.rgb = source_font.color.rgb
 
-                logger.debug("Copied font formatting between runs")
+                # logger.debug("Copied font formatting between runs")  # Too verbose
 
         except Exception as e:
             logger.warning(f"Failed to preserve run formatting: {e}")
@@ -918,33 +945,37 @@ class PowerPointProcessor:
         """Remove empty runs that can cause PowerPoint repair issues."""
         try:
             runs_to_remove = []
-            
+
             for run in paragraph.runs:
                 # Check if run is truly empty (no text or only whitespace)
                 if not run.text or not run.text.strip():
                     # Check if run has meaningful formatting that should be preserved
                     has_formatting = False
-                    if hasattr(run, 'font'):
+                    if hasattr(run, "font"):
                         font = run.font
-                        if (font.bold is not None or font.italic is not None or 
-                            font.underline is not None or font.size is not None or
-                            font.name is not None):
+                        if (
+                            font.bold is not None
+                            or font.italic is not None
+                            or font.underline is not None
+                            or font.size is not None
+                            or font.name is not None
+                        ):
                             has_formatting = True
-                    
+
                     # Only remove if it's truly empty with no special formatting
                     if not has_formatting:
                         runs_to_remove.append(run)
-            
+
             # Remove empty runs (but keep at least one run in the paragraph)
             if len(runs_to_remove) < len(paragraph.runs):
                 for run in runs_to_remove:
                     try:
                         # Remove the run's XML element from the paragraph
                         paragraph._element.remove(run._element)
-                        logger.debug("Removed empty run from paragraph")
+                        # logger.debug("Removed empty run from paragraph")  # Too verbose
                     except Exception as remove_err:
                         logger.warning(f"Could not remove empty run: {remove_err}")
-            
+
         except Exception as e:
             logger.warning(f"Failed to cleanup empty runs: {e}")
 
@@ -953,25 +984,27 @@ class PowerPointProcessor:
         try:
             if not self.presentation:
                 return
-                
+
             issues_found = 0
-            
+
             for slide_idx, slide in enumerate(self.presentation.slides):
                 try:
                     # Check each shape on the slide
                     for shape_idx, shape in enumerate(slide.shapes):
                         # Check text frames for empty paragraphs/runs
-                        if hasattr(shape, 'text_frame') and shape.text_frame:
-                            for para_idx, paragraph in enumerate(shape.text_frame.paragraphs):
+                        if hasattr(shape, "text_frame") and shape.text_frame:
+                            for para_idx, paragraph in enumerate(
+                                shape.text_frame.paragraphs
+                            ):
                                 # Ensure paragraph has at least one run
                                 if len(paragraph.runs) == 0:
                                     # Add a minimal run to prevent issues
-                                    paragraph.add_run("")
+                                    paragraph.add_run()
                                     issues_found += 1
-                                    logger.debug(f"Added empty run to paragraph in slide {slide_idx + 1}, shape {shape_idx}")
-                                
+                                    # logger.debug(f"Added empty run to paragraph in slide {slide_idx + 1}, shape {shape_idx}")  # Too verbose
+
                                 # Check for completely empty paragraphs
-                                total_text = ''.join(run.text for run in paragraph.runs)
+                                total_text = "".join(run.text for run in paragraph.runs)
                                 if not total_text and len(paragraph.runs) > 1:
                                     # Multiple empty runs - consolidate to one
                                     for run in paragraph.runs[1:]:
@@ -980,16 +1013,21 @@ class PowerPointProcessor:
                                         except:
                                             pass
                                     issues_found += 1
-                                    logger.debug(f"Consolidated empty runs in slide {slide_idx + 1}, shape {shape_idx}")
-                
+                                    # logger.debug(f"Consolidated empty runs in slide {slide_idx + 1}, shape {shape_idx}")  # Too verbose
+
                 except Exception as shape_err:
-                    logger.warning(f"Error validating slide {slide_idx + 1}: {shape_err}")
-            
+                    logger.warning(
+                        f"Error validating slide {slide_idx + 1}: {shape_err}"
+                    )
+
             if issues_found > 0:
-                logger.info(f"Fixed {issues_found} potential PowerPoint compatibility issues")
+                logger.info(
+                    f"Fixed {issues_found} potential PowerPoint compatibility issues"
+                )
             else:
-                logger.debug("No presentation integrity issues found")
-                
+                pass  # No issues found
+                # logger.debug("No presentation integrity issues found")  # Too verbose
+
         except Exception as e:
             logger.warning(f"Failed to validate presentation integrity: {e}")
 
@@ -1015,15 +1053,15 @@ class PowerPointProcessor:
             field_parts = field_name.split(".")
             current_value = data
 
-            # Debug logging
-            logger.debug(f"Getting field value for: {field_name}")
-            logger.debug(f"Data keys at root level: {list(data.keys())}")
+            # Debug logging (commented out to reduce verbosity)
+            # logger.debug(f"Getting field value for: {field_name}")
+            # logger.debug(f"Data keys at root level: {list(data.keys())}")
 
             # First try direct path resolution
             for part in field_parts:
                 if isinstance(current_value, dict):
                     current_value = current_value.get(part)
-                    logger.debug(f"After part '{part}': {type(current_value).__name__}")
+                    # logger.debug(f"After part '{part}': {type(current_value).__name__}")  # Too verbose
                 elif isinstance(current_value, list):
                     try:
                         index = int(part)
@@ -1032,26 +1070,20 @@ class PowerPointProcessor:
                             if 0 <= index < len(current_value)
                             else None
                         )
-                        logger.debug(
-                            f"After list index {index}: {type(current_value).__name__}"
-                        )
+                        # logger.debug(f"After list index {index}: {type(current_value).__name__}")  # Too verbose
                     except (ValueError, IndexError):
                         current_value = None
-                        logger.debug(f"Invalid list index: {part}")
+                        # logger.debug(f"Invalid list index: {part}")  # Too verbose
                 else:
                     current_value = None
-                    logger.debug(
-                        f"Cannot navigate further from {type(current_value).__name__}"
-                    )
+                    # logger.debug(f"Cannot navigate further from {type(current_value).__name__}")  # Too verbose
 
                 if current_value is None:
                     break
 
             # If direct path failed and we have sheet data, try looking in each sheet
             if current_value is None:
-                logger.debug(
-                    "Direct path resolution failed, trying sheet-nested lookup"
-                )
+                # logger.debug("Direct path resolution failed, trying sheet-nested lookup")  # Too verbose
                 # Try to find the field in sheet data (e.g., order_form.image_search.0.field)
                 for sheet_name, sheet_data in data.items():
                     # Skip metadata and debug fields
@@ -1060,7 +1092,7 @@ class PowerPointProcessor:
 
                     # Check if this sheet contains the first part of our field path
                     if isinstance(sheet_data, dict) and field_parts[0] in sheet_data:
-                        logger.debug(f"Found {field_parts[0]} in sheet {sheet_name}")
+                        # logger.debug(f"Found {field_parts[0]} in sheet {sheet_name}")  # Too verbose
                         # Start with the sheet data
                         nested_value = sheet_data
 
@@ -1085,9 +1117,18 @@ class PowerPointProcessor:
                                 break
 
                         if nested_value is not None:
-                            logger.debug(
-                                f"Found value via sheet-nested lookup: {nested_value}"
-                            )
+                            # Avoid logging large data structures like base64 images
+                            if isinstance(nested_value, dict) and any(
+                                key in str(nested_value).lower()
+                                for key in ["base64", "data:image"]
+                            ):
+                                logger.debug(
+                                    f"Found image data via sheet-nested lookup for field: {field_name}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"Found value via sheet-nested lookup: {nested_value}"
+                                )
                             return nested_value
 
                 # Special handling for flat structures without row index
@@ -1096,34 +1137,53 @@ class PowerPointProcessor:
                 if len(field_parts) >= 2:
                     table_name = field_parts[0]
                     field_key = field_parts[-1]
-                    
+
                     # Check if any part is a numeric index - if so, don't use fallback
                     has_numeric_index = False
-                    for part in field_parts[1:-1]:  # Check middle parts for numeric indices
+                    for part in field_parts[
+                        1:-1
+                    ]:  # Check middle parts for numeric indices
                         try:
                             int(part)
                             has_numeric_index = True
                             break
                         except ValueError:
                             continue
-                    
+
                     # Only apply fallback for non-indexed fields
                     if not has_numeric_index:
                         # Look for the table in each sheet
                         for sheet_name, sheet_data in data.items():
-                            if isinstance(sheet_data, dict) and table_name in sheet_data:
+                            if (
+                                isinstance(sheet_data, dict)
+                                and table_name in sheet_data
+                            ):
                                 table_data = sheet_data[table_name]
 
                                 # Case 1: Table is a flat dictionary (key-value pairs)
-                                if isinstance(table_data, dict) and field_key in table_data:
+                                if (
+                                    isinstance(table_data, dict)
+                                    and field_key in table_data
+                                ):
                                     value = table_data[field_key]
-                                    logger.debug(
-                                        f"Found value in flat structure {table_name}.{field_key}: {value}"
-                                    )
+                                    # Avoid logging large data structures like base64 images
+                                    if isinstance(value, dict) and any(
+                                        key in str(value).lower()
+                                        for key in ["base64", "data:image"]
+                                    ):
+                                        logger.debug(
+                                            f"Found image data in flat structure {table_name}.{field_key}"
+                                        )
+                                    else:
+                                        logger.debug(
+                                            f"Found value in flat structure {table_name}.{field_key}: {value}"
+                                        )
                                     return value
 
                                 # Case 2: Table is a list with a single item (only for non-indexed fields)
-                                elif isinstance(table_data, list) and len(table_data) > 0:
+                                elif (
+                                    isinstance(table_data, list) and len(table_data) > 0
+                                ):
                                     # Try first row if no index specified
                                     first_row = table_data[0]
                                     if (
@@ -1131,12 +1191,32 @@ class PowerPointProcessor:
                                         and field_key in first_row
                                     ):
                                         value = first_row[field_key]
-                                        logger.debug(
-                                            f"Found value in first row of {table_name}[0].{field_key}: {value}"
-                                        )
+                                        # Avoid logging large data structures like base64 images
+                                        if isinstance(value, dict) and any(
+                                            key in str(value).lower()
+                                            for key in ["base64", "data:image"]
+                                        ):
+                                            logger.debug(
+                                                f"Found image data in first row of {table_name}[0].{field_key}"
+                                            )
+                                        else:
+                                            logger.debug(
+                                                f"Found value in first row of {table_name}[0].{field_key}: {value}"
+                                            )
                                         return value
 
-            logger.debug(f"Final value: {current_value}")
+            # Ensure missing fields return empty string instead of None
+            if current_value is None:
+                logger.debug(f"Field '{field_name}' not found, returning empty string")
+                return ""
+
+            # Avoid logging large data structures like base64 images
+            if isinstance(current_value, dict) and any(
+                key in str(current_value).lower() for key in ["base64", "data:image"]
+            ):
+                logger.debug(f"Returning image data for field: {field_name}")
+            else:
+                logger.debug(f"Final value for '{field_name}': {current_value}")
             return current_value
 
         except Exception as e:

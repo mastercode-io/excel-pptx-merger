@@ -199,19 +199,22 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 return jsonify({"error": f"Invalid JSON configuration: {e}"}), 400
         elif request.is_json:
             extraction_config = request.json or {}
-            
+
         # If no configuration provided, use auto-detection
         if not extraction_config:
             logger.info("No configuration provided, using auto-detection")
             excel_processor_for_detection = ExcelProcessor(excel_file)
-            
+
             try:
-                extraction_config = excel_processor_for_detection.auto_detect_all_sheets()
+                extraction_config = (
+                    excel_processor_for_detection.auto_detect_all_sheets()
+                )
                 logger.info("Using auto-detection for all sheets in merge operation")
             except Exception as e:
                 logger.error(f"Auto-detection failed: {e}")
                 return create_error_response(
-                    ExcelProcessingError(f"Failed to auto-detect Excel structure: {e}"), 500
+                    ExcelProcessingError(f"Failed to auto-detect Excel structure: {e}"),
+                    500,
                 )
             finally:
                 excel_processor_for_detection.close()
@@ -885,7 +888,9 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
                     sheet_config = config.get(sheet_name) or config.get("default")
 
                 # Log what configuration we're using
-                logger.debug(f"Sheet {sheet_name}: config={sheet_config}, auto_detect={auto_detect}")
+                logger.debug(
+                    f"Sheet {sheet_name}: config={sheet_config}, auto_detect={auto_detect}"
+                )
 
                 # If no configuration provided, let auto-detection handle it
                 # (auto_detect=True is already set by default above)
