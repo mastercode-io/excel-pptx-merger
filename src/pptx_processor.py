@@ -1092,36 +1092,49 @@ class PowerPointProcessor:
 
                 # Special handling for flat structures without row index
                 # For fields like "client_info.client_name" (without row index)
+                # Only apply this fallback if the field doesn't contain a numeric index
                 if len(field_parts) >= 2:
                     table_name = field_parts[0]
                     field_key = field_parts[-1]
+                    
+                    # Check if any part is a numeric index - if so, don't use fallback
+                    has_numeric_index = False
+                    for part in field_parts[1:-1]:  # Check middle parts for numeric indices
+                        try:
+                            int(part)
+                            has_numeric_index = True
+                            break
+                        except ValueError:
+                            continue
+                    
+                    # Only apply fallback for non-indexed fields
+                    if not has_numeric_index:
+                        # Look for the table in each sheet
+                        for sheet_name, sheet_data in data.items():
+                            if isinstance(sheet_data, dict) and table_name in sheet_data:
+                                table_data = sheet_data[table_name]
 
-                    # Look for the table in each sheet
-                    for sheet_name, sheet_data in data.items():
-                        if isinstance(sheet_data, dict) and table_name in sheet_data:
-                            table_data = sheet_data[table_name]
-
-                            # Case 1: Table is a flat dictionary (key-value pairs)
-                            if isinstance(table_data, dict) and field_key in table_data:
-                                value = table_data[field_key]
-                                logger.debug(
-                                    f"Found value in flat structure {table_name}.{field_key}: {value}"
-                                )
-                                return value
-
-                            # Case 2: Table is a list with a single item
-                            elif isinstance(table_data, list) and len(table_data) > 0:
-                                # Try first row if no index specified
-                                first_row = table_data[0]
-                                if (
-                                    isinstance(first_row, dict)
-                                    and field_key in first_row
-                                ):
-                                    value = first_row[field_key]
+                                # Case 1: Table is a flat dictionary (key-value pairs)
+                                if isinstance(table_data, dict) and field_key in table_data:
+                                    value = table_data[field_key]
                                     logger.debug(
-                                        f"Found value in first row of {table_name}[0].{field_key}: {value}"
+                                        f"Found value in flat structure {table_name}.{field_key}: {value}"
                                     )
                                     return value
+
+                                # Case 2: Table is a list with a single item (only for non-indexed fields)
+                                elif isinstance(table_data, list) and len(table_data) > 0:
+                                    # Try first row if no index specified
+                                    first_row = table_data[0]
+                                    if (
+                                        isinstance(first_row, dict)
+                                        and field_key in first_row
+                                    ):
+                                        value = first_row[field_key]
+                                        logger.debug(
+                                            f"Found value in first row of {table_name}[0].{field_key}: {value}"
+                                        )
+                                        return value
 
             logger.debug(f"Final value: {current_value}")
             return current_value
