@@ -1,18 +1,14 @@
-"""PowerPoint template processing and merge field replacement module with enhanced image handling."""
+"""PowerPoint template processing and merge field replacement module."""
 
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 from PIL import Image as PILImage
 from pptx import Presentation
 from pptx.shapes.base import BaseShape
 from pptx.enum.shapes import MSO_SHAPE_TYPE
-from pptx.shapes.picture import Picture
-from pptx.util import Inches
-from pptx.text.text import TextFrame
-import io
-from .utils.exceptions import PowerPointProcessingError, TemplateError, ValidationError
+from .utils.exceptions import PowerPointProcessingError
 from .utils.validation import validate_merge_fields
 
 logger = logging.getLogger(__name__)
@@ -340,7 +336,7 @@ class PowerPointProcessor:
                     logger.debug(
                         f"Found image data for field '{field_name}': {type(image_data)}"
                     )
-                    
+
                     # Handle new mixed data structure (dict with base64/path)
                     if isinstance(image_data, dict):
                         # Try path first if it exists and is valid
@@ -349,22 +345,28 @@ class PowerPointProcessor:
                             if os.path.exists(path):
                                 logger.debug(f"Using existing file path: {path}")
                                 return path
-                        
+
                         # Fall back to base64 data
                         if "base64" in image_data and image_data["base64"]:
                             # Create temporary file from base64 data
-                            temp_path = self._create_temp_image_from_base64(image_data["base64"])
+                            temp_path = self._create_temp_image_from_base64(
+                                image_data["base64"]
+                            )
                             if temp_path:
-                                logger.debug(f"Created temporary image from base64: {temp_path}")
+                                logger.debug(
+                                    f"Created temporary image from base64: {temp_path}"
+                                )
                                 return temp_path
-                    
+
                     # Handle legacy string path format
                     elif isinstance(image_data, str):
                         if os.path.exists(str(image_data)):
                             logger.debug(f"Using image file path: {image_data}")
                             return str(image_data)
                         else:
-                            logger.warning(f"Image file does not exist at path: {image_data}")
+                            logger.warning(
+                                f"Image file does not exist at path: {image_data}"
+                            )
                 else:
                     logger.debug(
                         f"Field '{field_name}' is not an image field, but has value: {type(image_data)}"
@@ -608,7 +610,49 @@ class PowerPointProcessor:
             return False
 
     def _process_paragraph(self, paragraph, data: Dict[str, Any]) -> None:
-        """Process a single paragraph for merge field replacement."""
+        """Process a single paragraph for merge field replacement while preserving formatting."""
+        try:
+            # Try the new formatting-preserving approach first
+            if self._process_paragraph_preserve_formatting(paragraph, data):
+                return
+
+            # Fall back to the original approach if the new one fails
+            logger.warning("Falling back to original paragraph processing")
+            self._process_paragraph_original(paragraph, data)
+
+        except Exception as e:
+            logger.warning(f"Failed to process paragraph: {e}")
+
+    def _process_paragraph_preserve_formatting(
+        self, paragraph, data: Dict[str, Any]
+    ) -> bool:
+        """Process paragraph while preserving run-level formatting."""
+        try:
+            # Find all merge fields and their positions within runs
+            field_positions = self._find_merge_fields_in_runs(paragraph)
+
+            if not field_positions:
+                return True  # No merge fields to process
+
+            # Process each merge field
+            for field_info in field_positions:
+                field_name = field_info["field"]
+                field_value = self._get_field_value(field_name, data)
+                field_value_str = str(field_value) if field_value is not None else ""
+
+                # Replace the field in the runs
+                self._replace_field_in_runs(paragraph, field_info, field_value_str)
+
+            return True
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to process paragraph with formatting preservation: {e}"
+            )
+            return False
+
+    def _process_paragraph_original(self, paragraph, data: Dict[str, Any]) -> None:
+        """Original paragraph processing method (fallback)."""
         try:
             # Get the full paragraph text
             paragraph_text = ""
@@ -643,7 +687,213 @@ class PowerPointProcessor:
                     paragraph.add_run().text = new_text
 
         except Exception as e:
-            logger.warning(f"Failed to process paragraph: {e}")
+            logger.warning(f"Failed to process paragraph with original method: {e}")
+
+    def _find_merge_fields_in_runs(self, paragraph) -> List[Dict[str, Any]]:
+        """Find merge fields and their positions within paragraph runs."""
+        field_positions = []
+
+        try:
+            # Build a map of text positions to runs
+            run_map = []
+            text_position = 0
+
+            for run_idx, run in enumerate(paragraph.runs):
+                run_text = run.text
+                run_start = text_position
+                run_end = text_position + len(run_text)
+
+                run_map.append(
+                    {
+                        "run_idx": run_idx,
+                        "run": run,
+                        "text": run_text,
+                        "start": run_start,
+                        "end": run_end,
+                    }
+                )
+
+                text_position = run_end
+
+            # Get full paragraph text
+            full_text = "".join(run["text"] for run in run_map)
+
+            # Find all merge fields in the full text
+            merge_fields = validate_merge_fields(full_text)
+
+            for field in merge_fields:
+                field_pattern = f"{{{{{field}}}}}"
+                field_start = full_text.find(field_pattern)
+
+                if field_start != -1:
+                    field_end = field_start + len(field_pattern)
+
+                    # Find which runs contain this field
+                    affected_runs = []
+                    for run_info in run_map:
+                        # Check if this run overlaps with the field
+                        if (
+                            run_info["start"] < field_end
+                            and run_info["end"] > field_start
+                        ):
+                            # Calculate the portion of the field in this run
+                            field_start_in_run = max(0, field_start - run_info["start"])
+                            field_end_in_run = min(
+                                len(run_info["text"]), field_end - run_info["start"]
+                            )
+
+                            affected_runs.append(
+                                {
+                                    "run_idx": run_info["run_idx"],
+                                    "run": run_info["run"],
+                                    "field_start_in_run": field_start_in_run,
+                                    "field_end_in_run": field_end_in_run,
+                                    "run_text": run_info["text"],
+                                }
+                            )
+
+                    if affected_runs:
+                        field_positions.append(
+                            {
+                                "field": field,
+                                "field_pattern": field_pattern,
+                                "field_start": field_start,
+                                "field_end": field_end,
+                                "affected_runs": affected_runs,
+                            }
+                        )
+
+            return field_positions
+
+        except Exception as e:
+            logger.warning(f"Failed to find merge fields in runs: {e}")
+            return []
+
+    def _replace_field_in_runs(
+        self, paragraph, field_info: Dict[str, Any], replacement_text: str
+    ) -> None:
+        """Replace a merge field in runs while preserving formatting."""
+        try:
+            affected_runs = field_info["affected_runs"]
+
+            if len(affected_runs) == 1:
+                # Simple case: field is entirely within one run
+                self._replace_field_in_single_run(affected_runs[0], replacement_text)
+            else:
+                # Complex case: field spans multiple runs
+                self._replace_field_across_runs(
+                    paragraph, affected_runs, replacement_text
+                )
+
+        except Exception as e:
+            logger.warning(f"Failed to replace field in runs: {e}")
+
+    def _replace_field_in_single_run(
+        self, run_info: Dict[str, Any], replacement_text: str
+    ) -> None:
+        """Replace field within a single run."""
+        try:
+            run = run_info["run"]
+            original_text = run_info["run_text"]
+            field_start = run_info["field_start_in_run"]
+            field_end = run_info["field_end_in_run"]
+
+            # Build new text by replacing the field portion
+            new_text = (
+                original_text[:field_start]
+                + replacement_text
+                + original_text[field_end:]
+            )
+
+            # Update the run text (formatting is preserved automatically)
+            run.text = new_text
+            logger.debug(
+                f"Replaced field in single run: '{original_text}' -> '{new_text}'"
+            )
+
+        except Exception as e:
+            logger.warning(f"Failed to replace field in single run: {e}")
+
+    def _replace_field_across_runs(
+        self, paragraph, affected_runs: List[Dict[str, Any]], replacement_text: str
+    ) -> None:
+        """Replace field that spans across multiple runs."""
+        try:
+            if not affected_runs:
+                return
+
+            # Strategy: Put the replacement text in the first affected run and clear field portions from others
+            first_run_info = affected_runs[0]
+            first_run = first_run_info["run"]
+
+            # Build the replacement text for the first run
+            original_text = first_run_info["run_text"]
+            field_start = first_run_info["field_start_in_run"]
+
+            # Keep text before the field + replacement text
+            new_first_run_text = original_text[:field_start] + replacement_text
+
+            # Add any text after the field from the last run
+            if len(affected_runs) > 1:
+                last_run_info = affected_runs[-1]
+                last_run_text = last_run_info["run_text"]
+                field_end_in_last = last_run_info["field_end_in_run"]
+
+                # Add remaining text from last run
+                new_first_run_text += last_run_text[field_end_in_last:]
+            else:
+                # Single run case (shouldn't happen here, but handle it)
+                field_end = first_run_info["field_end_in_run"]
+                new_first_run_text += original_text[field_end:]
+
+            # Update first run with complete replacement
+            first_run.text = new_first_run_text
+
+            # Clear field portions from other affected runs
+            for i in range(1, len(affected_runs)):
+                run_info = affected_runs[i]
+                run = run_info["run"]
+                original_text = run_info["run_text"]
+
+                if i == len(affected_runs) - 1:
+                    # Last run: keep text after the field
+                    field_end = run_info["field_end_in_run"]
+                    run.text = original_text[field_end:]
+                else:
+                    # Middle runs: completely consumed by the field
+                    run.text = ""
+
+            logger.debug(f"Replaced field across {len(affected_runs)} runs")
+
+        except Exception as e:
+            logger.warning(f"Failed to replace field across runs: {e}")
+
+    def _preserve_run_formatting(self, source_run, target_run) -> None:
+        """Copy formatting properties from source run to target run."""
+        try:
+            # Copy font properties
+            if hasattr(source_run, "font") and hasattr(target_run, "font"):
+                source_font = source_run.font
+                target_font = target_run.font
+
+                # Copy common font properties
+                if source_font.name:
+                    target_font.name = source_font.name
+                if source_font.size:
+                    target_font.size = source_font.size
+                if source_font.bold is not None:
+                    target_font.bold = source_font.bold
+                if source_font.italic is not None:
+                    target_font.italic = source_font.italic
+                if source_font.underline is not None:
+                    target_font.underline = source_font.underline
+                if source_font.color.rgb:
+                    target_font.color.rgb = source_font.color.rgb
+
+                logger.debug("Copied font formatting between runs")
+
+        except Exception as e:
+            logger.warning(f"Failed to preserve run formatting: {e}")
 
     def _process_table_shape(self, shape: BaseShape, data: Dict[str, Any]) -> None:
         """Process table shape for merge field replacement."""
@@ -938,28 +1188,32 @@ class PowerPointProcessor:
             import base64
             import tempfile
             import os
-            
+
             # Extract the image format and data
-            if base64_data.startswith('data:image/'):
+            if base64_data.startswith("data:image/"):
                 # Format: data:image/png;base64,iVBORw0KGgo...
-                header, encoded_data = base64_data.split(',', 1)
-                image_format = header.split('/')[1].split(';')[0]  # Extract 'png' from 'data:image/png;base64'
+                header, encoded_data = base64_data.split(",", 1)
+                image_format = header.split("/")[1].split(";")[
+                    0
+                ]  # Extract 'png' from 'data:image/png;base64'
             else:
                 # Raw base64 data, assume PNG
                 encoded_data = base64_data
-                image_format = 'png'
-            
+                image_format = "png"
+
             # Decode base64 data
             image_bytes = base64.b64decode(encoded_data)
-            
+
             # Create temporary file
-            with tempfile.NamedTemporaryFile(suffix=f'.{image_format}', delete=False) as temp_file:
+            with tempfile.NamedTemporaryFile(
+                suffix=f".{image_format}", delete=False
+            ) as temp_file:
                 temp_file.write(image_bytes)
                 temp_path = temp_file.name
-            
+
             logger.debug(f"Created temporary image file: {temp_path}")
             return temp_path
-            
+
         except Exception as e:
             logger.error(f"Failed to create temporary image from base64: {e}")
             return None

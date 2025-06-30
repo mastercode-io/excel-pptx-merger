@@ -25,6 +25,7 @@ from .utils.exceptions import (
     ConfigurationError,
     APIError,
     AuthenticationError,
+    ExcelProcessingError,
 )
 from .utils.validation import validate_api_request
 from .utils.file_utils import save_uploaded_file, get_file_info
@@ -174,25 +175,7 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 ValidationError("Excel and PowerPoint files are required"), 400
             )
 
-        # Get extraction configuration
-        extraction_config = {}
-        if "config" in request.form:
-            try:
-                extraction_config = json.loads(request.form.get("config", "{}"))
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON configuration: {e}")
-                return jsonify({"error": f"Invalid JSON configuration: {e}"}), 400
-        elif request.is_json:
-            extraction_config = request.json or {}
-            
-        # If no configuration provided, use default configuration
-        if not extraction_config:
-            extraction_config = config_manager.get_default_config()
-            logger.info("Using default configuration for merge operation")
-
-        logger.debug(f"Extraction config: {extraction_config}")
-
-        # Get session ID from headers or generate a new one
+        # Get session ID from headers or generate a new one (needed early for auto-detection)
         session_id = request.headers.get("X-Session-ID")
         if not session_id:
             session_id = str(uuid.uuid4())
@@ -206,6 +189,36 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             f"File saving mode: {'enabled' if save_files else 'disabled (memory-only)'}"
         )
 
+        # Get extraction configuration
+        extraction_config = {}
+        if "config" in request.form:
+            try:
+                extraction_config = json.loads(request.form.get("config", "{}"))
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON configuration: {e}")
+                return jsonify({"error": f"Invalid JSON configuration: {e}"}), 400
+        elif request.is_json:
+            extraction_config = request.json or {}
+            
+        # If no configuration provided, use auto-detection
+        if not extraction_config:
+            logger.info("No configuration provided, using auto-detection")
+            excel_processor_for_detection = ExcelProcessor(excel_file)
+            
+            try:
+                extraction_config = excel_processor_for_detection.auto_detect_all_sheets()
+                logger.info("Using auto-detection for all sheets in merge operation")
+            except Exception as e:
+                logger.error(f"Auto-detection failed: {e}")
+                return create_error_response(
+                    ExcelProcessingError(f"Failed to auto-detect Excel structure: {e}"), 500
+                )
+            finally:
+                excel_processor_for_detection.close()
+
+        logger.debug(f"Extraction config: {extraction_config}")
+
+        # Initialize file handling
         temp_manager = None
         temp_dir = None
         excel_path = None

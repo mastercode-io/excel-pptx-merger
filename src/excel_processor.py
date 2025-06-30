@@ -1482,6 +1482,57 @@ class ExcelProcessor:
 
         return {"subtables": subtables}
 
+    def auto_detect_all_sheets(self) -> Dict[str, Any]:
+        """Auto-detect data structure for all sheets in the workbook.
+        
+        Returns:
+            Dictionary with global_settings and sheet_configs for all sheets
+        """
+        try:
+            logger.info("Auto-detecting structure for all sheets in workbook")
+            
+            # Create minimal global settings for auto-detection
+            global_settings = {
+                "image_extraction": {
+                    "enabled": True,
+                    "formats": ["png", "jpg", "jpeg", "gif", "webp"],
+                    "save_format": "png",
+                    "cleanup_after_merge": True
+                }
+            }
+            
+            # Auto-detect each sheet
+            sheet_configs = {}
+            for sheet_name in self.workbook.sheetnames:
+                logger.info(f"Auto-detecting structure for sheet: {sheet_name}")
+                worksheet = self.workbook[sheet_name]
+                
+                try:
+                    # Use existing auto-detection logic with scan_all_rows=True
+                    sheet_config = self._auto_detect_sheet_structure(
+                        worksheet, scan_all_rows=True
+                    )
+                    sheet_configs[sheet_name] = sheet_config
+                    logger.debug(f"Auto-detected config for {sheet_name}: {sheet_config}")
+                except Exception as e:
+                    logger.warning(f"Failed to auto-detect sheet '{sheet_name}': {e}")
+                    # Continue with other sheets, don't fail completely
+                    continue
+            
+            if not sheet_configs:
+                raise ExcelProcessingError("Failed to auto-detect any sheet structures")
+            
+            logger.info(f"Successfully auto-detected structure for {len(sheet_configs)} sheets")
+            
+            return {
+                "global_settings": global_settings,
+                "sheet_configs": sheet_configs
+            }
+            
+        except Exception as e:
+            logger.error(f"Auto-detection failed: {e}")
+            raise ExcelProcessingError(f"Failed to auto-detect workbook structure: {e}")
+
     def _scan_data_regions(
         self,
         worksheet: Worksheet,
