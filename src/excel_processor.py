@@ -342,6 +342,9 @@ class ExcelProcessor:
         """Extract key-value pairs from Excel sheet."""
         header_row, header_col = header_location
         orientation = config.get("orientation", "horizontal")
+        # Support for column offset - allows table to start in different column than search text
+        headers_col_offset = config.get("headers_col_offset", 0)
+        header_col = header_col + headers_col_offset
         max_pairs = (
             config.get("max_columns", 10)
             if orientation == "horizontal"
@@ -446,6 +449,9 @@ class ExcelProcessor:
         header_row, header_col = header_location
         headers_row = header_row + config.get("headers_row_offset", 0)
         data_start_row = headers_row + config.get("data_row_offset", 1)
+        # Support for column offset - allows table to start in different column than search text
+        headers_col_offset = config.get("headers_col_offset", 0)
+        header_col = header_col + headers_col_offset
         max_columns = config.get("max_columns", 20)
         max_rows = config.get("max_rows", 1000)
         column_mappings = config.get("column_mappings", {})

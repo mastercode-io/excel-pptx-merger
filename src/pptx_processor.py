@@ -145,6 +145,9 @@ class PowerPointProcessor:
                 logger.debug(f"Processing slide {slide_idx + 1}")
                 self._process_slide(slide, data, images)
 
+            # Validate and clean up before saving
+            self._validate_presentation_integrity()
+            
             # Save the merged presentation
             self.presentation.save(output_path)
             logger.info(f"Merged presentation saved to: {output_path}")
@@ -514,36 +517,47 @@ class PowerPointProcessor:
             width = shape.width
             height = shape.height
 
-            # Clear the text from the shape before removing it
-            if hasattr(shape, "text_frame"):
+            # Store shape properties before removal
+            shape_name = getattr(shape, 'name', 'Unknown')
+            
+            # Clear the text from the shape to prepare for replacement
+            if hasattr(shape, "text_frame") and shape.text_frame:
                 try:
-                    # Clear any text in the shape
-                    shape.text_frame.text = ""
-                    logger.debug(f"Cleared text from shape before replacement")
+                    shape.text_frame.clear()  # Use proper API method
+                    logger.debug(f"Cleared text from shape '{shape_name}' before replacement")
                 except Exception as text_err:
-                    logger.warning(f"Could not clear text from shape: {text_err}")
+                    logger.warning(f"Could not clear text from shape '{shape_name}': {text_err}")
 
-            # Remove the original shape
-            shape_id = shape.shape_id
-            sp_tree = slide.shapes._spTree
-            for idx, sp in enumerate(sp_tree.findall(".//{*}sp")):
-                if sp.get("id") == str(shape_id):
-                    # Before removing, check if we need to handle any special properties
-                    try:
-                        # Check for any text or other content that might still be visible
-                        txBody = sp.find(".//{*}txBody")
-                        if txBody is not None:
-                            # Clear all text paragraphs
-                            for p in txBody.findall(".//{*}p"):
-                                txBody.remove(p)
-                            logger.debug(f"Cleared text body XML elements from shape")
-                    except Exception as xml_err:
-                        logger.warning(f"Error clearing XML text elements: {xml_err}")
-
-                    # Now remove the shape
-                    sp_tree.remove(sp)
-                    logger.debug(f"Removed shape with ID {shape_id} from slide")
-                    break
+            # Use python-pptx API for safer shape removal
+            try:
+                # Get slide reference
+                slide_shapes = slide.shapes
+                
+                # Find and remove the shape using the proper API
+                for i, slide_shape in enumerate(slide_shapes):
+                    if slide_shape == shape:
+                        # Remove using the shape collection API (safer than direct XML)
+                        del slide_shapes[i]
+                        logger.debug(f"Safely removed shape '{shape_name}' from slide")
+                        break
+                        
+            except Exception as removal_err:
+                logger.warning(f"Could not remove shape using API, trying XML method: {removal_err}")
+                
+                # Fallback to XML method if API fails
+                try:
+                    shape_id = shape.shape_id
+                    sp_tree = slide.shapes._spTree
+                    
+                    for sp in sp_tree.findall(".//{*}sp"):
+                        if sp.get("id") == str(shape_id):
+                            sp_tree.remove(sp)
+                            logger.debug(f"Removed shape '{shape_name}' using XML fallback")
+                            break
+                            
+                except Exception as xml_err:
+                    logger.error(f"Failed to remove shape '{shape_name}': {xml_err}")
+                    return False
 
             # Add the image while maintaining aspect ratio
             try:
@@ -642,6 +656,9 @@ class PowerPointProcessor:
 
                 # Replace the field in the runs
                 self._replace_field_in_runs(paragraph, field_info, field_value_str)
+            
+            # Clean up any empty runs that might cause PowerPoint issues
+            self._cleanup_empty_runs(paragraph)
 
             return True
 
@@ -861,7 +878,9 @@ class PowerPointProcessor:
                     run.text = original_text[field_end:]
                 else:
                     # Middle runs: completely consumed by the field
-                    run.text = ""
+                    # Don't create empty runs - remove them instead
+                    if run.text.strip():  # Only clear if there was actual content
+                        run.text = ""
 
             logger.debug(f"Replaced field across {len(affected_runs)} runs")
 
@@ -894,6 +913,85 @@ class PowerPointProcessor:
 
         except Exception as e:
             logger.warning(f"Failed to preserve run formatting: {e}")
+
+    def _cleanup_empty_runs(self, paragraph) -> None:
+        """Remove empty runs that can cause PowerPoint repair issues."""
+        try:
+            runs_to_remove = []
+            
+            for run in paragraph.runs:
+                # Check if run is truly empty (no text or only whitespace)
+                if not run.text or not run.text.strip():
+                    # Check if run has meaningful formatting that should be preserved
+                    has_formatting = False
+                    if hasattr(run, 'font'):
+                        font = run.font
+                        if (font.bold is not None or font.italic is not None or 
+                            font.underline is not None or font.size is not None or
+                            font.name is not None):
+                            has_formatting = True
+                    
+                    # Only remove if it's truly empty with no special formatting
+                    if not has_formatting:
+                        runs_to_remove.append(run)
+            
+            # Remove empty runs (but keep at least one run in the paragraph)
+            if len(runs_to_remove) < len(paragraph.runs):
+                for run in runs_to_remove:
+                    try:
+                        # Remove the run's XML element from the paragraph
+                        paragraph._element.remove(run._element)
+                        logger.debug("Removed empty run from paragraph")
+                    except Exception as remove_err:
+                        logger.warning(f"Could not remove empty run: {remove_err}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to cleanup empty runs: {e}")
+
+    def _validate_presentation_integrity(self) -> None:
+        """Validate presentation integrity to prevent PowerPoint repair issues."""
+        try:
+            if not self.presentation:
+                return
+                
+            issues_found = 0
+            
+            for slide_idx, slide in enumerate(self.presentation.slides):
+                try:
+                    # Check each shape on the slide
+                    for shape_idx, shape in enumerate(slide.shapes):
+                        # Check text frames for empty paragraphs/runs
+                        if hasattr(shape, 'text_frame') and shape.text_frame:
+                            for para_idx, paragraph in enumerate(shape.text_frame.paragraphs):
+                                # Ensure paragraph has at least one run
+                                if len(paragraph.runs) == 0:
+                                    # Add a minimal run to prevent issues
+                                    paragraph.add_run("")
+                                    issues_found += 1
+                                    logger.debug(f"Added empty run to paragraph in slide {slide_idx + 1}, shape {shape_idx}")
+                                
+                                # Check for completely empty paragraphs
+                                total_text = ''.join(run.text for run in paragraph.runs)
+                                if not total_text and len(paragraph.runs) > 1:
+                                    # Multiple empty runs - consolidate to one
+                                    for run in paragraph.runs[1:]:
+                                        try:
+                                            paragraph._element.remove(run._element)
+                                        except:
+                                            pass
+                                    issues_found += 1
+                                    logger.debug(f"Consolidated empty runs in slide {slide_idx + 1}, shape {shape_idx}")
+                
+                except Exception as shape_err:
+                    logger.warning(f"Error validating slide {slide_idx + 1}: {shape_err}")
+            
+            if issues_found > 0:
+                logger.info(f"Fixed {issues_found} potential PowerPoint compatibility issues")
+            else:
+                logger.debug("No presentation integrity issues found")
+                
+        except Exception as e:
+            logger.warning(f"Failed to validate presentation integrity: {e}")
 
     def _process_table_shape(self, shape: BaseShape, data: Dict[str, Any]) -> None:
         """Process table shape for merge field replacement."""
