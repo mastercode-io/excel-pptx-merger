@@ -184,6 +184,11 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 return jsonify({"error": f"Invalid JSON configuration: {e}"}), 400
         elif request.is_json:
             extraction_config = request.json or {}
+            
+        # If no configuration provided, use default configuration
+        if not extraction_config:
+            extraction_config = config_manager.get_default_config()
+            logger.info("Using default configuration for merge operation")
 
         logger.debug(f"Extraction config: {extraction_config}")
 
@@ -866,6 +871,12 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
                     # Look for sheet-specific config
                     sheet_config = config.get(sheet_name) or config.get("default")
 
+                # Log what configuration we're using
+                logger.debug(f"Sheet {sheet_name}: config={sheet_config}, auto_detect={auto_detect}")
+
+                # If no configuration provided, let auto-detection handle it
+                # (auto_detect=True is already set by default above)
+
                 try:
                     # Extract data from this sheet
                     extracted_data = excel_processor.extract_single_sheet(
@@ -1249,6 +1260,9 @@ def merge_cli(
             except Exception as e:
                 click.echo(f"Error reading config file: {e}", err=True)
                 return 1
+        else:
+            # Use default configuration when no config file is provided
+            extraction_config = config_manager.get_default_config()
 
         # Initialize temp file manager
         temp_file_config = extraction_config.get("global_settings", {}).get(

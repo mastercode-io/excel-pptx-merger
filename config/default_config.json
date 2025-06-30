@@ -10,7 +10,7 @@
             "method": "contains_text",
             "text": "Client",
             "column": "A",
-            "search_range": "A1:A10"
+            "search_range": "A1:A3"
           },
           "data_extraction": {
             "orientation": "horizontal",
@@ -20,54 +20,52 @@
             "column_mappings": {
               "Client": "client_name",
               "Word Or Image": "search_type",
-              "Date": "order_date",
-              "Contact": "contact_person"
+              "G&S Classes": "gs_classes",
+              "SIC": "sic_code",
+              "Nature of business": "business_nature",
+              "Countries": "countries"
             }
           }
         },
         {
-          "name": "trademark_classes",
+          "name": "word_search",
           "type": "table",
           "header_search": {
             "method": "contains_text",
-            "text": "Class",
+            "text": "Word",
             "column": "A",
-            "search_range": "A10:A30"
+            "search_range": "A4:A8"
           },
           "data_extraction": {
-            "orientation": "vertical",
             "headers_row_offset": 0,
             "data_row_offset": 1,
-            "max_columns": 5,
-            "max_rows": 20,
+            "max_columns": 3,
+            "max_rows": 10,
             "column_mappings": {
-              "Class": "class_number",
-              "Description": "class_description",
-              "Goods/Services": "goods_services",
-              "Priority": "priority_level",
-              "Status": "application_status"
+              "Word": "word",
+              "Search Criteria": "search_criteria",
+              "Remarks": "remarks"
             }
           }
         },
         {
-          "name": "fee_information",
-          "type": "key_value_pairs",
+          "name": "image_search",
+          "type": "table",
           "header_search": {
             "method": "contains_text",
-            "text": "Fee",
+            "text": "Image",
             "column": "A",
-            "search_range": "A30:A50"
+            "search_range": "A9:A15"
           },
           "data_extraction": {
-            "orientation": "vertical",
             "headers_row_offset": 0,
             "data_row_offset": 1,
-            "max_columns": 2,
+            "max_columns": 3,
+            "max_rows": 10,
             "column_mappings": {
-              "Base Fee": "base_fee",
-              "Class Fee": "class_fee",
-              "Total": "total_fee",
-              "Payment Method": "payment_method"
+              "Image": "image",
+              "Search Criteria": "search_criteria",
+              "Image Class.Division.Subdivision": "image_classification"
             }
           }
         }
@@ -128,6 +126,7 @@
     }
   },
   "global_settings": {
+    "default_extraction_type": "table",
     "normalize_keys": true,
     "temp_file_cleanup": {
       "enabled": true,

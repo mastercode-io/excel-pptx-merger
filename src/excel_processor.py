@@ -179,6 +179,16 @@ class ExcelProcessor:
             # Store global settings for use in other methods
             self._global_settings = global_settings
 
+            # Extract images if image extraction is enabled
+            all_images = {}
+            if global_settings.get("image_extraction", {}).get("enabled", True):
+                try:
+                    # Extract images from all sheets
+                    all_images = self.extract_images()
+                    logger.info(f"Extracted images from {len(all_images)} sheets")
+                except Exception as e:
+                    logger.warning(f"Failed to extract images: {e}")
+
             for sheet_name, config in sheet_config.items():
                 logger.info(f"Processing sheet: {sheet_name}")
 
@@ -187,7 +197,11 @@ class ExcelProcessor:
                     continue
 
                 worksheet = self.workbook[sheet_name]
-                sheet_data = self._process_sheet(worksheet, config)
+
+                # Get images for this specific sheet
+                sheet_images = all_images.get(sheet_name, [])
+
+                sheet_data = self._process_sheet(worksheet, config, sheet_images)
 
                 # Normalize sheet name for JSON compatibility
                 normalized_sheet_name = normalize_column_name(sheet_name)
@@ -203,7 +217,10 @@ class ExcelProcessor:
             raise ExcelProcessingError(f"Failed to extract data: {e}")
 
     def _process_sheet(
-        self, worksheet: Worksheet, config: Dict[str, Any]
+        self,
+        worksheet: Worksheet,
+        config: Dict[str, Any],
+        images: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
         """Process a single worksheet according to configuration."""
         sheet_data = {}
@@ -216,7 +233,9 @@ class ExcelProcessor:
             logger.debug(f"Processing subtable: {subtable_name}")
 
             try:
-                subtable_data = self._extract_subtable(worksheet, subtable_config)
+                subtable_data = self._extract_subtable(
+                    worksheet, subtable_config, images
+                )
                 sheet_data[subtable_name] = subtable_data
             except Exception as e:
                 logger.error(f"Failed to process subtable '{subtable_name}': {e}")
@@ -225,7 +244,10 @@ class ExcelProcessor:
         return sheet_data
 
     def _extract_subtable(
-        self, worksheet: Worksheet, config: Dict[str, Any]
+        self,
+        worksheet: Worksheet,
+        config: Dict[str, Any],
+        images: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
         """Extract data for a specific subtable configuration."""
         subtable_type = config.get("type", "table")
@@ -244,7 +266,9 @@ class ExcelProcessor:
                 worksheet, header_location, data_extraction
             )
         elif subtable_type == "table":
-            return self._extract_table_data(worksheet, header_location, data_extraction)
+            return self._extract_table_data(
+                worksheet, header_location, data_extraction, images
+            )
         else:
             raise ValidationError(f"Unknown subtable type: {subtable_type}")
 
@@ -416,6 +440,7 @@ class ExcelProcessor:
         worksheet: Worksheet,
         header_location: Tuple[int, int],
         config: Dict[str, Any],
+        images: Optional[List[Dict]] = None,
     ) -> List[Dict[str, Any]]:
         """Extract table data from Excel sheet."""
         header_row, header_col = header_location
@@ -467,6 +492,8 @@ class ExcelProcessor:
 
             # Extract data rows
             data_rows = []
+            consecutive_empty_rows = 0
+
             for row_offset in range(max_rows):
                 row = data_start_row + row_offset
                 row_data = {}
@@ -479,11 +506,40 @@ class ExcelProcessor:
                     cell = worksheet.cell(row=row, column=col)
                     value = cell.value
 
-                    if not is_empty_cell_value(value):
+                    # Check for image at this cell position
+                    image_data = None
+                    if images:
+                        image_data = self._get_image_at_position(row, col, images)
+
+                    # Handle mixed content (text + image), image only, or text only
+                    if image_data and not is_empty_cell_value(value):
+                        # Mixed content: both text and image
+                        cell_value = {"text": value, "base64": image_data["base64"]}
+                        if "path" in image_data:
+                            cell_value["path"] = image_data["path"]
                         has_data = True
+                    elif image_data:
+                        # Image only
+                        cell_value = image_data
+                        has_data = True
+                    else:
+                        # Check for potential cell-embedded images (not detectable by openpyxl)
+                        cell_embedded_info = self._check_for_cell_embedded_image(
+                            cell, row, col
+                        )
+                        
+                        if cell_embedded_info:
+                            # Cell likely contains embedded image that we can't extract
+                            cell_value = cell_embedded_info
+                            has_data = True
+                        else:
+                            # Text only (or empty)
+                            cell_value = value
+                            if not is_empty_cell_value(value):
+                                has_data = True
 
                     # Use the mapped header name for the key
-                    row_data[header] = value
+                    row_data[header] = cell_value
 
                     # Store field type as metadata if not the default text type
                     field_type = field_types.get(header, "text")
@@ -493,8 +549,14 @@ class ExcelProcessor:
                         row_data["_field_types"][header] = field_type
 
                 if not has_data:
-                    # Empty row found, stop extraction
-                    break
+                    consecutive_empty_rows += 1
+                    # Stop extraction after 2+ consecutive empty rows
+                    if consecutive_empty_rows > 2:
+                        break
+                    # Skip this empty row but continue processing
+                    continue
+                else:
+                    consecutive_empty_rows = 0  # Reset counter when we find data
 
                 # Only add non-empty rows with actual data (skip header row data)
                 if has_data and row > headers_row:
@@ -974,6 +1036,7 @@ class ExcelProcessor:
 
         # Extract data using the configuration
         sheet_config = {sheet_name: detection_config}
+        logger.debug(f"Using detection config for {sheet_name}: {detection_config}")
         extracted_data = self.extract_data({}, sheet_config)
 
         # Extract images from the sheet
@@ -1030,6 +1093,79 @@ class ExcelProcessor:
                     # Set max_rows to the maximum number of rows in the sheet
                     # Add a buffer to ensure we get everything
                     subtable["data_extraction"]["max_rows"] = max_sheet_rows + 10
+
+    def _get_image_at_position(
+        self, row: int, col: int, images: List[Dict]
+    ) -> Optional[Dict]:
+        """Get image data if there's an image at the specified cell position.
+        
+        Args:
+            row: 1-based row number from table extraction
+            col: 1-based column number from table extraction  
+            images: List of image dictionaries with 0-based coordinates
+        """
+        for img in images:
+            if "position" in img and "coordinates" in img["position"]:
+                coords = img["position"]["coordinates"]["from"]
+                # Convert 1-based table coordinates to 0-based image coordinates
+                if coords["row"] == row - 1 and coords["col"] == col - 1:
+                    image_data = {"base64": img["image_base64"]}
+                    if "path" in img:
+                        image_data["path"] = img["path"]
+                    return image_data
+        return None
+
+    def _check_for_cell_embedded_image(
+        self, cell, row: int, col: int
+    ) -> Optional[Dict]:
+        """Check if a cell likely contains an embedded image (detection only)."""
+        from openpyxl.utils import get_column_letter
+        
+        cell_ref = f"{get_column_letter(col)}{row}"
+        
+        # Note: Complex extraction methods removed - detection only
+        
+        # Check for various indicators of embedded content
+        indicators = {
+            "has_hyperlink": cell.hyperlink is not None,
+            "has_comment": cell.comment is not None,
+            "data_type": cell.data_type,
+            "number_format": cell.number_format,
+            "fill_type": cell.fill.fill_type if cell.fill else None,
+            "font_name": cell.font.name if cell.font else None,
+        }
+        
+        # More specific detection for #VALUE! that might indicate images
+        # Only treat as embedded image if it's specifically in keywords/images-related columns
+        if isinstance(cell.value, str) and cell.value == "#VALUE!":
+            # Only detect as embedded image in likely image columns (column A for keywords_images)
+            if col == 1:  # Column A (keywords_images column)
+                # Try to get more context about the cell
+                return {
+                    "type": "cell_embedded_image_placeholder", 
+                    "message": "Embedded image detected (extraction not supported)",
+                    "cell_ref": cell_ref,
+                    "original_value": cell.value,
+                    "extraction_status": "requires_manual_export",
+                    "note": "Cell-embedded images can be manually exported from Excel using 'Save as Web Page' or similar methods",
+                    "suggested_workflow": "Export Excel as HTML or use specialized tools to extract embedded images"
+                }
+            else:
+                # For #VALUE! in other columns, treat as formula error, not image
+                return None
+        
+        # Check for cells that might contain "Picture" or similar indicators
+        if isinstance(cell.value, str) and cell.value.lower() in ["picture", "image"]:
+            return {
+                "type": "cell_embedded_image_placeholder", 
+                "message": f"Cell contains '{cell.value}' indicating embedded image",
+                "cell_ref": cell_ref,
+                "original_value": cell.value,
+                "extraction_status": "not_available"
+            }
+            
+        return None
+
 
     def _link_images_to_rows(
         self, rows: List[Dict[str, Any]], images: List[Dict[str, Any]]
@@ -1431,6 +1567,7 @@ class ExcelProcessor:
         # Look at rows below to determine pattern
         data_rows = 0
         consistent_structure = True
+        consecutive_empty_rows = 0
 
         # Determine max rows to scan
         max_rows_to_scan = (
@@ -1447,25 +1584,28 @@ class ExcelProcessor:
 
             non_empty_count = sum(1 for cell in row_data if cell is not None)
 
-            # If we find an empty row after some data rows, consider it the end of the data region
-            # unless we're scanning all rows, in which case we continue past empty rows
-            if non_empty_count == 0 and data_rows > 0 and not scan_all_rows:
-                break  # End of data
-
-            if non_empty_count > 0:  # Only count non-empty rows
+            if non_empty_count == 0:
+                consecutive_empty_rows += 1
+                # Allow up to 2 consecutive empty rows within a table, break after 2
+                if consecutive_empty_rows > 2 and data_rows > 0 and not scan_all_rows:
+                    break  # End of data after 2+ consecutive empty rows
+            else:
+                consecutive_empty_rows = 0  # Reset counter when we find data
                 data_rows += 1
 
-                # Check if structure is consistent with table format
-                if non_empty_count < header_cols * 0.3:  # Less than 30% filled
+                # Check if structure is consistent with table format  
+                # Lowered threshold to 15% to better handle sparse table data
+                if non_empty_count < header_cols * 0.15:  # Less than 15% filled
                     consistent_structure = False
 
         if data_rows >= 1:
+            # Strongly prefer table format for any structured data
+            # Only use key_value_pairs for very sparse data (< 10% consistent)
+            use_table = consistent_structure or data_rows >= 2
+            detection_type = "table" if use_table else "key_value_pairs"
+            logger.debug(f"Detection result: data_rows={data_rows}, consistent={consistent_structure}, use_table={use_table}, type={detection_type}")
             return {
-                "type": (
-                    "table"
-                    if consistent_structure and data_rows > 1
-                    else "key_value_pairs"
-                ),
+                "type": detection_type,
                 "rows": data_rows,
                 "cols": header_cols,
             }

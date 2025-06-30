@@ -80,14 +80,13 @@ class ConfigManager:
                                 "method": "contains_text",
                                 "text": "Word",
                                 "column": "A",
-                                "search_range": "A1:A20",
+                                "search_range": "A4:A8",
                             },
                             "data_extraction": {
-                                "orientation": "vertical",
                                 "headers_row_offset": 0,
                                 "data_row_offset": 1,
                                 "max_columns": 3,
-                                "max_rows": 10,
+                                "max_rows": 3,
                                 "column_mappings": {
                                     "Word": "word",
                                     "Search Criteria": "search_criteria",
@@ -102,10 +101,9 @@ class ConfigManager:
                                 "method": "contains_text",
                                 "text": "Image",
                                 "column": "A",
-                                "search_range": "A10:A30",
+                                "search_range": "A9:A15",
                             },
                             "data_extraction": {
-                                "orientation": "vertical",
                                 "headers_row_offset": 0,
                                 "data_row_offset": 1,
                                 "max_columns": 3,

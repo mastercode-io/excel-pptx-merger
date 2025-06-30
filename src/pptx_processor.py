@@ -333,24 +333,41 @@ class PowerPointProcessor:
             # Check if this is an image field based on metadata
             is_image = self._is_image_field(field_name, data)
 
-            # First try to get image path from data
-            image_path = self._get_field_value(field_name, data)
-            if image_path:
+            # First try to get image data from data
+            image_data = self._get_field_value(field_name, data)
+            if image_data:
                 if is_image:
                     logger.debug(
-                        f"Found image path in data for field '{field_name}': {image_path}"
+                        f"Found image data for field '{field_name}': {type(image_data)}"
                     )
-                    # Verify the image file exists
-                    if os.path.exists(str(image_path)):
-                        logger.debug(f"Image file exists at path: {image_path}")
-                        return str(image_path)
-                    else:
-                        logger.warning(
-                            f"Image file does not exist at path: {image_path}"
-                        )
+                    
+                    # Handle new mixed data structure (dict with base64/path)
+                    if isinstance(image_data, dict):
+                        # Try path first if it exists and is valid
+                        if "path" in image_data and image_data["path"]:
+                            path = str(image_data["path"])
+                            if os.path.exists(path):
+                                logger.debug(f"Using existing file path: {path}")
+                                return path
+                        
+                        # Fall back to base64 data
+                        if "base64" in image_data and image_data["base64"]:
+                            # Create temporary file from base64 data
+                            temp_path = self._create_temp_image_from_base64(image_data["base64"])
+                            if temp_path:
+                                logger.debug(f"Created temporary image from base64: {temp_path}")
+                                return temp_path
+                    
+                    # Handle legacy string path format
+                    elif isinstance(image_data, str):
+                        if os.path.exists(str(image_data)):
+                            logger.debug(f"Using image file path: {image_data}")
+                            return str(image_data)
+                        else:
+                            logger.warning(f"Image file does not exist at path: {image_data}")
                 else:
                     logger.debug(
-                        f"Field '{field_name}' is not an image field, but has value: {image_path}"
+                        f"Field '{field_name}' is not an image field, but has value: {type(image_data)}"
                     )
                     # Not an image field, don't return the path
                     return None
@@ -914,6 +931,38 @@ class PowerPointProcessor:
             return match.group(1)
 
         return None
+
+    def _create_temp_image_from_base64(self, base64_data: str) -> Optional[str]:
+        """Create a temporary image file from base64 data."""
+        try:
+            import base64
+            import tempfile
+            import os
+            
+            # Extract the image format and data
+            if base64_data.startswith('data:image/'):
+                # Format: data:image/png;base64,iVBORw0KGgo...
+                header, encoded_data = base64_data.split(',', 1)
+                image_format = header.split('/')[1].split(';')[0]  # Extract 'png' from 'data:image/png;base64'
+            else:
+                # Raw base64 data, assume PNG
+                encoded_data = base64_data
+                image_format = 'png'
+            
+            # Decode base64 data
+            image_bytes = base64.b64decode(encoded_data)
+            
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(suffix=f'.{image_format}', delete=False) as temp_file:
+                temp_file.write(image_bytes)
+                temp_path = temp_file.name
+            
+            logger.debug(f"Created temporary image file: {temp_path}")
+            return temp_path
+            
+        except Exception as e:
+            logger.error(f"Failed to create temporary image from base64: {e}")
+            return None
 
     def close(self) -> None:
         """Close the presentation and free resources."""
