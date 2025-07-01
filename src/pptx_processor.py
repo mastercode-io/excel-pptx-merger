@@ -669,22 +669,41 @@ class PowerPointProcessor:
     def _process_paragraph_preserve_formatting(
         self, paragraph, data: Dict[str, Any]
     ) -> bool:
-        """Process paragraph while preserving run-level formatting."""
+        """Process paragraph while preserving run-level formatting - ITERATIVE VERSION."""
         try:
-            # Find all merge fields and their positions within runs
-            field_positions = self._find_merge_fields_in_runs(paragraph)
+            # Use iterative approach to avoid position conflicts
+            # When we replace one field, it changes text positions, so we need to
+            # recalculate positions for remaining fields
+            max_iterations = 10  # Prevent infinite loops
+            iteration = 0
 
-            if not field_positions:
-                return True  # No merge fields to process
+            while iteration < max_iterations:
+                # Recalculate field positions each time to avoid position shifts
+                field_positions = self._find_merge_fields_in_runs(paragraph)
 
-            # Process each merge field
-            for field_info in field_positions:
+                if not field_positions:
+                    # No more fields to process
+                    break
+
+                # Process just the first field found to avoid position conflicts
+                field_info = field_positions[0]
                 field_name = field_info["field"]
                 field_value = self._get_field_value(field_name, data)
                 field_value_str = str(field_value) if field_value is not None else ""
 
-                # Replace the field in the runs
+                logger.debug(
+                    f"Processing field '{field_name}' with value '{field_value_str}' (iteration {iteration + 1})"
+                )
+
+                # Replace this one field
                 self._replace_field_in_runs(paragraph, field_info, field_value_str)
+
+                iteration += 1
+
+            if iteration >= max_iterations:
+                logger.warning(
+                    "Reached maximum iterations in paragraph processing - possible infinite loop"
+                )
 
             # Clean up any empty runs that might cause PowerPoint issues
             self._cleanup_empty_runs(paragraph)
@@ -861,58 +880,41 @@ class PowerPointProcessor:
     def _replace_field_across_runs(
         self, paragraph, affected_runs: List[Dict[str, Any]], replacement_text: str
     ) -> None:
-        """Replace field that spans across multiple runs."""
+        """Replace field that spans across multiple runs - FIXED VERSION."""
         try:
             if not affected_runs:
                 return
 
-            # Strategy: Put the replacement text in the first affected run and clear field portions from others
-            first_run_info = affected_runs[0]
-            first_run = first_run_info["run"]
+            # FIXED STRATEGY:
+            # 1. Build the complete replacement by preserving text before and after field
+            # 2. Put everything in the first run
+            # 3. Clear all other affected runs
 
-            # Build the replacement text for the first run
-            original_text = first_run_info["run_text"]
-            field_start = first_run_info["field_start_in_run"]
+            first_run = affected_runs[0]
+            last_run = affected_runs[-1]
 
-            # Keep text before the field + replacement text
-            new_first_run_text = original_text[:field_start] + replacement_text
+            # Text before the field (from first run)
+            text_before = first_run["run_text"][: first_run["field_start_in_run"]]
 
-            # Add any text after the field from the last run
-            if len(affected_runs) > 1:
-                last_run_info = affected_runs[-1]
-                last_run_text = last_run_info["run_text"]
-                field_end_in_last = last_run_info["field_end_in_run"]
+            # Text after the field (from last run)
+            text_after = last_run["run_text"][last_run["field_end_in_run"] :]
 
-                # Add remaining text from last run
-                new_first_run_text += last_run_text[field_end_in_last:]
-            else:
-                # Single run case (shouldn't happen here, but handle it)
-                field_end = first_run_info["field_end_in_run"]
-                new_first_run_text += original_text[field_end:]
+            # Complete replacement text
+            complete_text = text_before + replacement_text + text_after
 
-            # Update first run with complete replacement
-            first_run.text = new_first_run_text
+            # Update first run with complete text
+            first_run["run"].text = complete_text
 
-            # Clear field portions from other affected runs
+            # Clear all other affected runs
             for i in range(1, len(affected_runs)):
-                run_info = affected_runs[i]
-                run = run_info["run"]
-                original_text = run_info["run_text"]
+                affected_runs[i]["run"].text = ""
 
-                if i == len(affected_runs) - 1:
-                    # Last run: keep text after the field
-                    field_end = run_info["field_end_in_run"]
-                    run.text = original_text[field_end:]
-                else:
-                    # Middle runs: completely consumed by the field
-                    # Don't create empty runs - remove them instead
-                    if run.text.strip():  # Only clear if there was actual content
-                        run.text = ""
-
-            # logger.debug(f"Replaced field across {len(affected_runs)} runs")  # Too verbose
+            logger.debug(
+                f"Fixed multi-run replacement: combined {len(affected_runs)} runs into first run"
+            )
 
         except Exception as e:
-            logger.warning(f"Failed to replace field across runs: {e}")
+            logger.warning(f"Failed to replace field across runs (fixed): {e}")
 
     def _preserve_run_formatting(self, source_run, target_run) -> None:
         """Copy formatting properties from source run to target run."""
