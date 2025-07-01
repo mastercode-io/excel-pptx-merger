@@ -121,3 +121,8 @@ Uses custom exception classes in src/utils/exceptions.py for structured error ha
 
 ### Debug Mode
 Development mode saves debug information including extracted data and copies of processed files to the debug directory for troubleshooting.
+
+### Testing Philosophy
+- **User handles comprehensive testing**: The user will run merge tests with real data as it's faster and more representative of actual usage scenarios
+- **Claude runs basic verification only**: Only run basic tests (like unit tests or simple integration tests) to verify code functionality and catch obvious regressions
+- **Real-world validation**: Complex scenarios, edge cases, and performance testing are best handled by the user with actual production data

@@ -722,6 +722,9 @@ class PowerPointProcessor:
             if self._paragraph_contains_fields(paragraph):
                 self._ensure_clean_field_structure(paragraph)
 
+            # ENHANCED: Aggressive cleanup of all empty/whitespace runs
+            self._aggressive_empty_run_cleanup(paragraph)
+
             # ENHANCED: Remove any remaining error attributes from the paragraph
             self._remove_error_attributes_from_paragraph(paragraph)
 
@@ -1306,6 +1309,30 @@ class PowerPointProcessor:
                         content = re.sub(pattern, replacement, content)
                         removed_count += 1
             
+            # CRITICAL FIX: Remove empty runs that appear after field elements (main corruption cause)
+            field_adjacent_pattern = r'</a:fld><a:r><a:t></a:t></a:r>'
+            field_adjacent_matches = re.findall(field_adjacent_pattern, content)
+            if field_adjacent_matches:
+                logger.debug(f"Removing {len(field_adjacent_matches)} field-adjacent empty runs from {os.path.basename(xml_file_path)}")
+                content = re.sub(field_adjacent_pattern, '</a:fld>', content)
+                removed_count += len(field_adjacent_matches)
+            
+            # ENHANCED: Remove any empty runs with just whitespace
+            empty_whitespace_pattern = r'<a:r[^>]*><a:t>\s*</a:t></a:r>'
+            whitespace_matches = re.findall(empty_whitespace_pattern, content)
+            if whitespace_matches:
+                logger.debug(f"Removing {len(whitespace_matches)} whitespace-only runs from {os.path.basename(xml_file_path)}")
+                content = re.sub(empty_whitespace_pattern, '', content)
+                removed_count += len(whitespace_matches)
+            
+            # ENHANCED: Remove multiple consecutive empty runs
+            consecutive_empty_pattern = r'(<a:r[^>]*><a:t></a:t></a:r>\s*){2,}'
+            consecutive_matches = re.findall(consecutive_empty_pattern, content)
+            if consecutive_matches:
+                logger.debug(f"Removing {len(consecutive_matches)} consecutive empty run groups from {os.path.basename(xml_file_path)}")
+                content = re.sub(consecutive_empty_pattern, '', content)
+                removed_count += len(consecutive_matches)
+
             # Remove problematic empty runs with dirty="0" in layouts and masters
             if 'slideLayout' in xml_file_path or 'slideMaster' in xml_file_path:
                 # Remove empty runs that have dirty="0" and no meaningful content
@@ -1387,6 +1414,39 @@ class PowerPointProcessor:
                 
         except Exception as e:
             logger.warning(f"Failed to clean field structure: {e}")
+
+    def _aggressive_empty_run_cleanup(self, paragraph) -> None:
+        """Aggressively remove all empty runs that could cause PowerPoint corruption."""
+        try:
+            para_xml = paragraph._element
+            runs_to_remove = []
+            
+            # Find all text runs
+            for run in para_xml.findall('.//a:r', {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}):
+                # Check if run has empty or whitespace-only text
+                text_elem = run.find('.//a:t', {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'})
+                if text_elem is not None:
+                    text_content = text_elem.text or ""
+                    # Remove if completely empty or just whitespace
+                    if not text_content.strip():
+                        runs_to_remove.append(run)
+                else:
+                    # Run without text element - definitely remove
+                    runs_to_remove.append(run)
+            
+            # Remove identified empty runs
+            for run in runs_to_remove:
+                try:
+                    para_xml.remove(run)
+                    logger.debug("Removed empty/whitespace run in aggressive cleanup")
+                except Exception as e:
+                    logger.debug(f"Could not remove run in aggressive cleanup: {e}")
+                    
+            if runs_to_remove:
+                logger.debug(f"Aggressive cleanup removed {len(runs_to_remove)} empty runs")
+                
+        except Exception as e:
+            logger.warning(f"Failed in aggressive empty run cleanup: {e}")
 
     def _process_table_shape(self, shape: BaseShape, data: Dict[str, Any]) -> None:
         """Process table shape for merge field replacement."""
