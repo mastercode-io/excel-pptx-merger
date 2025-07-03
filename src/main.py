@@ -17,6 +17,7 @@ import uuid
 from .config_manager import ConfigManager
 from .excel_processor import ExcelProcessor
 from .pptx_processor import PowerPointProcessor
+from .excel_updater import ExcelUpdater
 from .temp_file_manager import TempFileManager
 from .utils.exceptions import (
     ExcelPptxMergerError,
@@ -1022,6 +1023,76 @@ def get_stats() -> Tuple[Dict[str, Any], int]:
 
     except Exception as e:
         return create_error_response(e, 500)
+
+
+@app.route("/api/v1/update", methods=["POST"])
+def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
+    """Update Excel file with provided data."""
+    temp_manager = None
+    
+    try:
+        # Validate request
+        if "excel_file" not in request.files:
+            return create_error_response(
+                ValidationError("Excel file is required"), 400
+            )
+            
+        excel_file = request.files["excel_file"]
+        
+        # Get update data and config from form
+        update_data_str = request.form.get("update_data", "{}")
+        config_str = request.form.get("config", "{}")
+        
+        try:
+            update_data = json.loads(update_data_str)
+            config = json.loads(config_str)
+        except json.JSONDecodeError as e:
+            return create_error_response(
+                ValidationError(f"Invalid JSON format: {e}"), 400
+            )
+        
+        # Validate file
+        if not excel_file.filename:
+            return create_error_response(
+                ValidationError("No file selected"), 400
+            )
+            
+        # Setup temp file management
+        temp_manager = TempFileManager(app_config["temp_file_cleanup"])
+        temp_dir = temp_manager.create_temp_directory()
+        
+        # Save uploaded Excel file
+        excel_filename = f"input_{uuid.uuid4().hex[:8]}.xlsx"
+        excel_path = os.path.join(temp_dir, excel_filename)
+        excel_file.save(excel_path)
+        
+        logger.info(f"Processing Excel update request for file: {excel_file.filename}")
+        
+        # Update Excel file
+        updater = ExcelUpdater(excel_path)
+        try:
+            updated_path = updater.update_excel(update_data, config)
+            
+            # Return updated file
+            return send_file(
+                updated_path,
+                as_attachment=True,
+                download_name=f"updated_{excel_file.filename}",
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+        except Exception as e:
+            logger.error(f"Excel update failed: {e}")
+            return create_error_response(e, 400)
+        finally:
+            updater.close()
+        
+    except Exception as e:
+        logger.error(f"Update endpoint error: {e}")
+        return create_error_response(e, 500)
+    finally:
+        if temp_manager:
+            temp_manager.cleanup_old_directories()
 
 
 def save_debug_info(extracted_data, images, temp_dir, base_filename):

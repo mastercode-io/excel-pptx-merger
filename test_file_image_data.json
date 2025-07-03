@@ -1,0 +1,14 @@
+{
+  "image_search": [
+    {
+      "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "search_criteria": "Base64 image test",
+      "image_classification": "26.01.01"
+    },
+    {
+      "image": "file:///Users/alexsherin/Projects_/excel-pptx-merger/tests/fixtures/images/image_Order Form_1.png",
+      "search_criteria": "File path image test", 
+      "image_classification": "26.01.02"
+    }
+  ]
+}

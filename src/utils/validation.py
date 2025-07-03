@@ -58,6 +58,9 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                                                 "headers_row_offset": {
                                                     "type": "integer"
                                                 },
+                                                "headers_col_offset": {
+                                                    "type": "integer"
+                                                },
                                                 "data_row_offset": {"type": "integer"},
                                                 "max_columns": {"type": "integer"},
                                                 "max_rows": {"type": "integer"},
@@ -96,12 +99,70 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                                                 },
                                             },
                                         },
+                                        "data_update": {
+                                            "type": "object",
+                                            "properties": {
+                                                "orientation": {
+                                                    "type": "string",
+                                                    "enum": ["horizontal", "vertical"],
+                                                },
+                                                "headers_row_offset": {
+                                                    "type": "integer"
+                                                },
+                                                "headers_col_offset": {
+                                                    "type": "integer"
+                                                },
+                                                "data_row_offset": {"type": "integer"},
+                                                "max_columns": {"type": "integer"},
+                                                "max_rows": {"type": "integer"},
+                                                "column_mappings": {
+                                                    "type": "object",
+                                                    "patternProperties": {
+                                                        ".*": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                                "name": {
+                                                                    "type": "string"
+                                                                },
+                                                                "type": {
+                                                                    "type": "string",
+                                                                    "enum": [
+                                                                        "text",
+                                                                        "image",
+                                                                        "number",
+                                                                        "date",
+                                                                        "boolean",
+                                                                    ],
+                                                                },
+                                                            },
+                                                            "required": [
+                                                                "name",
+                                                                "type"
+                                                            ],
+                                                        }
+                                                    },
+                                                },
+                                            },
+                                            "required": ["column_mappings"],
+                                        },
                                     },
-                                    "required": [
-                                        "name",
-                                        "type",
-                                        "header_search",
-                                        "data_extraction",
+                                    "anyOf": [
+                                        {
+                                            "required": [
+                                                "name",
+                                                "type", 
+                                                "header_search",
+                                                "data_extraction",
+                                            ]
+                                        },
+                                        {
+                                            "required": [
+                                                "name",
+                                                "type",
+                                                "header_search", 
+                                                "data_update",
+                                            ]
+                                        }
                                     ],
                                 },
                             }

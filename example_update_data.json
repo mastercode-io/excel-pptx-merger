@@ -1,0 +1,42 @@
+{
+  "report_info": {
+    "report_title": "Updated Pipeline Name Report"
+  },
+  "client_info": {
+    "client_name": "New Client Corporation",
+    "search_type": "Word and Image",
+    "gs_classes": "Class 35, 42",
+    "sic_code": "12345",
+    "business_nature": "Technology Services",
+    "countries": "US, UK, EU"
+  },
+  "search_criteria": [
+    {
+      "word": "TechCorp",
+      "search_criteria": "Exact Match",
+      "remarks": "Primary brand name"
+    },
+    {
+      "word": "Tech Corp",
+      "search_criteria": "Similar Match", 
+      "remarks": "Alternative spelling"
+    },
+    {
+      "word": "Technology",
+      "search_criteria": "Contains",
+      "remarks": "Broad category"
+    }
+  ],
+  "image_search": [
+    {
+      "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "search_criteria": "Logo similarity search",
+      "image_classification": "26.01.03"
+    },
+    {
+      "image": "https://via.placeholder.com/150x150.png?text=Logo2",
+      "search_criteria": "Alternative logo search",
+      "image_classification": "26.01.04"
+    }
+  ]
+}

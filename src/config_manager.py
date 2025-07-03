@@ -394,6 +394,12 @@ class ConfigManager:
                     "OPTIMIZE_IMAGE_QUALITY", True
                 ),
             },
+            "temp_file_cleanup": {
+                "enabled": self._get_env_bool("TEMP_CLEANUP_ENABLED", True),
+                "delay_seconds": self._get_env_int("TEMP_CLEANUP_DELAY", 300),
+                "keep_on_error": self._get_env_bool("TEMP_KEEP_ON_ERROR", True),
+                "development_mode": self._get_env_bool("DEVELOPMENT_MODE", False),
+            },
         }
 
     def get_image_extraction_config(self) -> Dict[str, Any]:
