@@ -3,7 +3,7 @@
     "report_title": "Updated Pipeline Name Report"
   },
   "client_info": {
-    "client_name": "New Client Corporation",
+    "client_name": "ABC Corporation Ltd.",
     "search_type": "Word and Image",
     "gs_classes": "Class 35, 42",
     "sic_code": "12345",
@@ -12,31 +12,30 @@
   },
   "search_criteria": [
     {
-      "word": "TechCorp",
-      "search_criteria": "Exact Match",
-      "remarks": "Primary brand name"
+      "word": "Brand name"
     },
     {
-      "word": "Tech Corp",
-      "search_criteria": "Similar Match", 
-      "remarks": "Alternative spelling"
+      "word": "Brand name"
     },
     {
-      "word": "Technology",
-      "search_criteria": "Contains",
-      "remarks": "Broad category"
+      "word": "Brand"
+    },
+    {
+      "word": "name"
+    },
+    {
+      "word": "brand.com"
+    },
+    {
+      "word": "name.co.uk"
     }
   ],
   "image_search": [
     {
-      "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-      "search_criteria": "Logo similarity search",
-      "image_classification": "26.01.03"
+      "image": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB3aWR0aD0iMTUwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iIzMzNzNkYyIvPgogIDx0ZXh0IHg9Ijc1IiB5PSIxMDAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNiIgZmlsbD0id2hpdGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIwLjNlbSI+TE9HTzE8L3RleHQ+Cjwvc3ZnPg=="
     },
     {
-      "image": "https://via.placeholder.com/150x150.png?text=Logo2",
-      "search_criteria": "Alternative logo search",
-      "image_classification": "26.01.04"
+      "image": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB3aWR0aD0iMTUwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iIzI4YTc0NSIvPgogIDx0ZXh0IHg9Ijc1IiB5PSIxMDAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNiIgZmlsbD0id2hpdGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIwLjNlbSI+TE9HTzI8L3RleHQ+Cjwvc3ZnPg=="
     }
   ]
 }

@@ -194,7 +194,7 @@ class ExcelUpdater:
                         cell_address = mapping_key
                     else:
                         # Column header name - find the column
-                        header_col = self._find_header_column(sheet, base_row, mapping_key, config)
+                        header_col = self._find_header_column(sheet, base_row, mapping_key, config, base_col)
                         if header_col:
                             cell_address = f"{get_column_letter(header_col)}{data_row}"
                         else:
@@ -228,7 +228,7 @@ class ExcelUpdater:
                             cell_address = f"{mapping_key}{current_row}"
                         else:
                             # Header name - find the column
-                            header_col = self._find_header_column(sheet, base_row, mapping_key, config)
+                            header_col = self._find_header_column(sheet, base_row, mapping_key, config, base_col)
                             if header_col:
                                 cell_address = f"{get_column_letter(header_col)}{current_row}"
                             else:
@@ -445,8 +445,8 @@ class ExcelUpdater:
         """Process image with size management and return (processed_image, (width, height))."""
         try:
             # Default image size in points (Excel units)
-            default_width = 100  # points
-            default_height = 75  # points
+            default_width = 50  # points
+            default_height = 25  # points
             
             # Get original size
             original_width, original_height = pil_img.size
@@ -518,10 +518,10 @@ class ExcelUpdater:
             return False
 
     def _find_header_column(self, sheet: Worksheet, header_row: int, header_text: str, 
-                           config: Dict[str, Any]) -> Optional[int]:
+                           config: Dict[str, Any], base_col: int = 1) -> Optional[int]:
         """Find column index for header text."""
         max_columns = config.get("max_columns", 20)
-        start_col = 1
+        start_col = base_col
         
         for col_offset in range(max_columns):
             col_idx = start_col + col_offset

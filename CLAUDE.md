@@ -92,6 +92,7 @@ docker run -p 5000:5000 excel-pptx-merger:latest
 - **POST /api/v1/merge**: Main processing endpoint
 - **POST /api/v1/preview**: Preview extraction without merging
 - **POST /api/v1/extract**: Extract data from single Excel sheet
+- **POST /api/v1/update**: Update Excel file with data (supports dual payload modes)
 - **GET /api/v1/config**: Get default configuration
 - **GET /api/v1/health**: Health check with feature status
 
@@ -113,14 +114,39 @@ docker run -p 5000:5000 excel-pptx-merger:latest
 ### Memory vs File-Based Processing
 The application supports both memory-only processing (for Cloud Functions) and file-based processing (for local development). This is controlled by the `save_files` configuration option.
 
+### Dual Payload Mode Support
+The `/api/v1/update` endpoint supports two payload formats for maximum client compatibility:
+
+#### **Multipart Mode (Standard Clients)**
+- **Content-Type**: `multipart/form-data`
+- **Excel File**: Binary file upload
+- **Data**: JSON strings in form fields
+- **Use Case**: Postman, web browsers, standard HTTP clients
+
+#### **JSON Mode (CRM/Automation Systems)**
+- **Content-Type**: `application/json` or `text/plain`
+- **Excel File**: Base64-encoded string in JSON
+- **Data**: Direct JSON objects
+- **Use Case**: Deluge CRM, automation systems, webhooks
+
+The endpoint automatically detects the payload format and processes both modes through a unified processing path.
+
+### CRM System Compatibility
+Special handling for CRM and automation systems that may:
+- Send JSON data with incorrect Content-Type headers (`text/plain` instead of `application/json`)
+- Include large base64-encoded images in payloads
+- Add additional metadata or tracking information
+
+The system includes enhanced Content-Type detection and robust JSON parsing to handle these scenarios.
+
 ### Image Handling
 Images are extracted from Excel files with position information and converted to base64 for embedding in JSON responses. The system supports position-based matching between Excel images and PowerPoint placeholders.
 
 ### Error Handling
-Uses custom exception classes in src/utils/exceptions.py for structured error handling across the application.
+Uses custom exception classes in src/utils/exceptions.py for structured error handling across the application. Enhanced 413 error handling provides detailed diagnostics for payload size issues.
 
 ### Debug Mode
-Development mode saves debug information including extracted data and copies of processed files to the debug directory for troubleshooting.
+Development mode saves debug information including extracted data and copies of processed files to the debug directory for troubleshooting. Includes enhanced logging for payload type detection and processing modes.
 
 ### Testing Philosophy
 - **User handles comprehensive testing**: The user will run merge tests with real data as it's faster and more representative of actual usage scenarios

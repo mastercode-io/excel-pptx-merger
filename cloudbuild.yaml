@@ -20,7 +20,7 @@ steps:
       - '--allow-unauthenticated'
       - '--memory=1024MB'
       - '--timeout=540s'
-      - '--set-env-vars=STORAGE_BACKEND=GCS,GCS_BUCKET_NAME=${_BUCKET_NAME},GCS_BASE_PREFIX=${_BASE_PREFIX},API_KEY=${_API_KEY}'
+      - '--set-env-vars=STORAGE_BACKEND=GCS,GCS_BUCKET_NAME=${_BUCKET_NAME},GCS_BASE_PREFIX=${_BASE_PREFIX},API_KEY=${_API_KEY},FLASK_DEBUG=true,DEVELOPMENT_MODE=true,LOG_LEVEL=DEBUG'
 
 substitutions:
   _REGION: europe-west2

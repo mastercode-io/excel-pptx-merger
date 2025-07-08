@@ -1,5 +1,4 @@
 {
-  "version": "1.0",
   "sheet_configs": {
     "Order Form": {
       "subtables": [
@@ -8,17 +7,18 @@
           "type": "key_value_pairs",
           "header_search": {
             "method": "contains_text",
-            "text": "Search/Audit or Monitoring & Representation",
+            "text": "Search/Audit",
             "column": "E",
             "search_range": "E10:E20"
           },
           "data_update": {
             "orientation": "horizontal",
             "headers_row_offset": 0,
+            "headers_col_offset": 0,
             "data_row_offset": 1,
-            "max_columns": 1,
-          "column_mappings": {
-              "Search/Audit or Monitoring & Representation": {
+            "max_columns": 5,
+            "column_mappings": {
+              "E": {
                 "name": "report_title",
                 "type": "text"
               }
@@ -37,30 +37,31 @@
           "data_update": {
             "orientation": "horizontal",
             "headers_row_offset": 0,
+            "headers_col_offset": 0,
             "data_row_offset": 1,
             "max_columns": 6,
             "column_mappings": {
-              "Client": {
+              "A2": {
                 "name": "client_name",
                 "type": "text"
               },
-              "Word Or Image": {
+              "B2": {
                 "name": "search_type",
                 "type": "text"
               },
-              "G&S Classes": {
+              "C2": {
                 "name": "gs_classes",
                 "type": "text"
               },
-              "SIC": {
+              "D2": {
                 "name": "sic_code",
                 "type": "text"
               },
-              "Nature of business": {
+              "E2": {
                 "name": "business_nature",
                 "type": "text"
               },
-              "Designated Countries": {
+              "F2": {
                 "name": "countries",
                 "type": "text"
               }
@@ -79,20 +80,13 @@
           "data_update": {
             "orientation": "vertical",
             "headers_row_offset": 0,
+            "headers_col_offset": 0,
             "data_row_offset": 1,
             "max_columns": 3,
             "max_rows": 10,
             "column_mappings": {
-              "Word": {
+              "A": {
                 "name": "word",
-                "type": "text"
-              },
-              "Search Criteria": {
-                "name": "search_criteria",
-                "type": "text"
-              },
-              "Remarks": {
-                "name": "remarks",
                 "type": "text"
               }
             }
@@ -110,40 +104,19 @@
           "data_update": {
             "orientation": "vertical",
             "headers_row_offset": 0,
+            "headers_col_offset": 0,
             "data_row_offset": 1,
             "max_columns": 3,
             "max_rows": 10,
             "column_mappings": {
-              "Image": {
+              "A": {
                 "name": "image",
                 "type": "image"
-              },
-              "Search Criteria": {
-                "name": "search_criteria",
-                "type": "text"
-              },
-              "Image Class.Division.Subdivision": {
-                "name": "image_classification",
-                "type": "text"
               }
             }
           }
         }
       ]
-    }
-  },
-  "global_settings": {
-    "normalize_keys": true,
-    "temp_file_cleanup": {
-      "enabled": true,
-      "delay_seconds": 300,
-      "keep_on_error": true,
-      "development_mode": false
-    },
-    "image_compression": {
-      "enabled": false,
-      "threshold_mb": 2,
-      "quality": 80
     }
   }
 }

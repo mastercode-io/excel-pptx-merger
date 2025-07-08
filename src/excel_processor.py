@@ -22,6 +22,8 @@ from .utils.validation import (
     validate_cell_range,
     is_empty_cell_value,
 )
+from .excel_range_exporter import ExcelRangeExporter, create_range_configs_from_dict
+from .config_schema_validator import validate_config_file
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +31,8 @@ logger = logging.getLogger(__name__)
 class ExcelProcessor:
     """Processes Excel files and extracts data according to configuration."""
 
-    def __init__(self, file_input: Union[str, BinaryIO]) -> None:
+    def __init__(self, file_input: Union[str, BinaryIO], 
+                 graph_credentials: Optional[Dict[str, str]] = None) -> None:
         """Initialize Excel processor with file path or file-like object."""
         self.file_input = file_input
         self.file_path = None
@@ -38,6 +41,15 @@ class ExcelProcessor:
         self._is_memory_file = not isinstance(file_input, str)
         self._memory_file = None
         self._image_cache = {}
+        self._range_exporter = None
+        
+        # Initialize range exporter if credentials provided
+        if graph_credentials:
+            self._range_exporter = ExcelRangeExporter(
+                client_id=graph_credentials.get("client_id", ""),
+                client_secret=graph_credentials.get("client_secret", ""),
+                tenant_id=graph_credentials.get("tenant_id", "")
+            )
 
         if self._is_memory_file:
             self._load_from_memory()
@@ -162,13 +174,15 @@ class ExcelProcessor:
         return list(self.workbook.sheetnames)
 
     def extract_data(
-        self, global_settings: Dict[str, Any], sheet_config: Dict[str, Any]
+        self, global_settings: Dict[str, Any], sheet_config: Dict[str, Any],
+        full_config: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Extract data from Excel sheet according to configuration.
 
         Args:
             global_settings: Global settings for extraction
             sheet_config: Configuration for each sheet
+            full_config: Full configuration including range_images (optional)
 
         Returns:
             Dictionary of extracted data
@@ -188,6 +202,16 @@ class ExcelProcessor:
                     logger.info(f"Extracted images from {len(all_images)} sheets")
                 except Exception as e:
                     logger.warning(f"Failed to extract images: {e}")
+
+            # Extract range images if configured and enabled
+            range_images = {}
+            if (full_config and "range_images" in full_config and 
+                global_settings.get("range_images", {}).get("enabled", True)):
+                try:
+                    range_images = self._extract_range_images(full_config["range_images"])
+                    logger.info(f"Extracted {len(range_images)} range images")
+                except Exception as e:
+                    logger.warning(f"Failed to extract range images: {e}")
 
             for sheet_name, config in sheet_config.items():
                 logger.info(f"Processing sheet: {sheet_name}")
@@ -210,6 +234,10 @@ class ExcelProcessor:
                 )
 
                 extracted_data[normalized_sheet_name] = sheet_data
+
+            # Add range images to extracted data if any were found
+            if range_images:
+                extracted_data["_range_images"] = range_images
 
             return extracted_data
 
@@ -1729,3 +1757,76 @@ class ExcelProcessor:
             config["data_extraction"]["orientation"] = "horizontal"
 
         return config
+
+    def _extract_range_images(self, range_configs_data: List[Dict[str, Any]]) -> Dict[str, str]:
+        """Extract range images using Graph API.
+        
+        Args:
+            range_configs_data: List of range image configurations
+            
+        Returns:
+            Dictionary mapping field_name to image file path
+        """
+        if not self._range_exporter:
+            logger.warning("Range exporter not initialized - Graph API credentials required")
+            return {}
+            
+        if not range_configs_data:
+            return {}
+            
+        try:
+            # Validate and create range configurations
+            range_configs = create_range_configs_from_dict(range_configs_data)
+            logger.info(f"Processing {len(range_configs)} range image configurations")
+            
+            # Get the Excel file path for upload
+            excel_file_path = self._get_excel_file_path()
+            if not excel_file_path:
+                logger.error("Cannot determine Excel file path for range image export")
+                return {}
+            
+            # Export ranges as images
+            results = self._range_exporter.export_ranges(excel_file_path, range_configs)
+            
+            # Process results and return mapping
+            range_images = {}
+            for result in results:
+                if result.success:
+                    range_images[result.field_name] = result.image_path
+                    logger.info(f"Successfully exported range image: {result.field_name} -> {result.image_path}")
+                else:
+                    logger.error(f"Failed to export range image '{result.field_name}': {result.error_message}")
+            
+            return range_images
+            
+        except Exception as e:
+            logger.error(f"Error during range image extraction: {e}")
+            return {}
+    
+    def _get_excel_file_path(self) -> Optional[str]:
+        """Get the Excel file path for range export operations."""
+        if self._is_memory_file:
+            # For in-memory files, we need to save to a temporary file
+            if self._memory_file:
+                try:
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+                        tmp_file.write(self._memory_file.getvalue())
+                        temp_path = tmp_file.name
+                    logger.info(f"Created temporary file for range export: {temp_path}")
+                    return temp_path
+                except Exception as e:
+                    logger.error(f"Failed to create temporary file for range export: {e}")
+                    return None
+            return None
+        else:
+            return self.file_path
+
+    def cleanup_range_exporter(self) -> None:
+        """Cleanup resources used by range exporter."""
+        if self._range_exporter:
+            try:
+                self._range_exporter.cleanup_temp_files()
+                logger.info("Cleaned up range exporter temporary files")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup range exporter: {e}")

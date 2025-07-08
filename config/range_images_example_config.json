@@ -1,0 +1,183 @@
+{
+  "version": "1.1",
+  "sheet_configs": {
+    "Order Form": {
+      "subtables": [
+        {
+          "name": "client_info",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Client",
+            "column": "A",
+            "search_range": "A1:A3"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 6,
+            "column_mappings": {
+              "Client": "client_name",
+              "Word Or Image": "search_type",
+              "G&S Classes": "gs_classes",
+              "SIC": "sic_code",
+              "Nature of business": "business_nature",
+              "Countries": "countries"
+            }
+          }
+        },
+        {
+          "name": "word_search",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Word",
+            "column": "A",
+            "search_range": "A4:A8"
+          },
+          "data_extraction": {
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 3,
+            "max_rows": 10,
+            "column_mappings": {
+              "Word": "word",
+              "Search Criteria": "search_criteria",
+              "Remarks": "remarks"
+            }
+          }
+        },
+        {
+          "name": "image_search",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Image",
+            "column": "A",
+            "search_range": "A9:A15"
+          },
+          "data_extraction": {
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 3,
+            "max_rows": 10,
+            "column_mappings": {
+              "Image": "image",
+              "Search Criteria": "search_criteria",
+              "Image Class.Division.Subdivision": "image_classification"
+            }
+          }
+        }
+      ]
+    },
+    "Data Summary": {
+      "subtables": [
+        {
+          "name": "quarterly_results",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Quarter",
+            "column": "A",
+            "search_range": "A1:A10"
+          },
+          "data_extraction": {
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 5,
+            "max_rows": 15,
+            "column_mappings": {
+              "Quarter": "quarter",
+              "Revenue": "revenue",
+              "Expenses": "expenses",
+              "Profit": "profit",
+              "Growth %": "growth_percent"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "range_images": [
+    {
+      "field_name": "client_summary_table",
+      "sheet_name": "Order Form",
+      "range": "A1:F3",
+      "include_headers": true,
+      "output_format": "png",
+      "dpi": 150,
+      "fit_to_content": true
+    },
+    {
+      "field_name": "word_search_table",
+      "sheet_name": "Order Form",
+      "range": "A4:C14",
+      "include_headers": true,
+      "output_format": "png",
+      "dpi": 200,
+      "fit_to_content": true
+    },
+    {
+      "field_name": "quarterly_results_chart",
+      "sheet_name": "Data Summary",
+      "range": "A1:E16",
+      "include_headers": true,
+      "output_format": "png",
+      "dpi": 300,
+      "fit_to_content": false,
+      "width": 800,
+      "height": 600
+    },
+    {
+      "field_name": "financial_overview",
+      "sheet_name": "Data Summary",
+      "range": "G1:L25",
+      "include_headers": false,
+      "output_format": "png",
+      "dpi": 150,
+      "fit_to_content": true
+    }
+  ],
+  "global_settings": {
+    "default_extraction_type": "table",
+    "normalize_keys": true,
+    "temp_file_cleanup": {
+      "enabled": true,
+      "delay_seconds": 300,
+      "keep_on_error": true,
+      "development_mode": false
+    },
+    "image_extraction": {
+      "enabled": true,
+      "formats": ["png", "jpg", "jpeg", "gif"],
+      "max_size_mb": 10,
+      "preserve_aspect_ratio": true
+    },
+    "range_images": {
+      "enabled": true,
+      "max_range_cells": 10000,
+      "default_dpi": 150,
+      "default_format": "png",
+      "temp_cleanup_enabled": true,
+      "graph_api": {
+        "timeout_seconds": 60,
+        "retry_attempts": 3,
+        "retry_delay_seconds": 2
+      }
+    },
+    "validation": {
+      "strict_mode": false,
+      "allow_empty_values": true,
+      "required_fields": ["client_name"],
+      "data_type_validation": false,
+      "validate_ranges": true
+    },
+    "output_formatting": {
+      "date_format": "%Y-%m-%d",
+      "currency_format": "$%.2f",
+      "number_format": "%.2f",
+      "text_encoding": "utf-8"
+    }
+  }
+}

@@ -309,6 +309,10 @@ class PowerPointProcessor:
 
     def _is_image_field(self, field_name: str, data: Dict[str, Any]) -> bool:
         """Determine if a field is an image field based on metadata."""
+        # Check if it's a range image
+        if "_range_images" in data and field_name in data["_range_images"]:
+            return True
+            
         field_type = self._get_field_type(field_name, data)
         return field_type == "image"
 
@@ -349,6 +353,7 @@ class PowerPointProcessor:
             or "img" in field.lower()
             or "photo" in field.lower()
             or "picture" in field.lower()
+            or "range" in field.lower()  # Added for range images
             for field in merge_fields
         )
 
@@ -360,6 +365,15 @@ class PowerPointProcessor:
     ) -> Optional[str]:
         """Get image path for a specific field."""
         try:
+            # Check for range images first
+            if "_range_images" in data and field_name in data["_range_images"]:
+                range_image_path = data["_range_images"][field_name]
+                if os.path.exists(str(range_image_path)):
+                    logger.debug(f"Found range image for field '{field_name}': {range_image_path}")
+                    return str(range_image_path)
+                else:
+                    logger.warning(f"Range image file does not exist: {range_image_path}")
+
             # Check if this is an image field based on metadata
             is_image = self._is_image_field(field_name, data)
 
