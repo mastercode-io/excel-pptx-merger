@@ -475,6 +475,29 @@ class ExcelUpdater:
             # Return copy of original image if processing fails
             return pil_img.copy(), pil_img.size
 
+    def _get_image_dimensions_lightweight(self, image_path_or_bytes):
+        """Get image dimensions without full PIL processing to avoid corruption."""
+        try:
+            if isinstance(image_path_or_bytes, str):
+                # File path
+                with open(image_path_or_bytes, 'rb') as f:
+                    image_bytes = f.read()
+            else:
+                # Already bytes
+                image_bytes = image_path_or_bytes
+            
+            # Use PIL but only for dimensions, then immediately close
+            temp_img = PILImage.open(io.BytesIO(image_bytes))
+            dimensions = temp_img.size
+            temp_img.close()  # Immediately close to avoid corruption
+            
+            return dimensions
+            
+        except Exception as e:
+            self._log_warning(f"Failed to get image dimensions: {e}")
+            # Return default dimensions if detection fails
+            return (100, 75)  # Default fallback
+
     def _adjust_row_height(self, sheet, row, image_height_pixels):
         """Adjust row height to accommodate image."""
         try:
@@ -493,6 +516,27 @@ class ExcelUpdater:
                 
         except Exception as e:
             self._log_warning(f"Failed to adjust row height for row {row}: {e}")
+
+    def _adjust_column_width(self, sheet, col, image_width_pixels):
+        """Adjust column width to accommodate image."""
+        try:
+            # Convert pixels to Excel character widths (rough approximation)
+            # Excel default column width is ~8.43 characters ≈ 64 points ≈ 85 pixels
+            required_width_chars = max(8.43, image_width_pixels / 10)  # ~10 pixels per character
+            
+            # Get current column width (default is ~8.43 characters)
+            col_letter = get_column_letter(col)
+            current_width = sheet.column_dimensions[col_letter].width or 8.43
+            
+            # Only increase width if necessary
+            if required_width_chars > current_width:
+                sheet.column_dimensions[col_letter].width = required_width_chars
+                self._log_info(f"Adjusted column {col_letter} width from {current_width:.1f} to {required_width_chars:.1f} characters")
+            else:
+                self._log_info(f"Column {col_letter} width sufficient: {current_width:.1f} characters (needed: {required_width_chars:.1f})")
+                
+        except Exception as e:
+            self._log_warning(f"Failed to adjust column width for column {col}: {e}")
 
     def _is_cell_address(self, mapping_key: str) -> bool:
         """Check if mapping key is a cell address (e.g., 'B14')."""
