@@ -895,6 +895,19 @@ class ExcelUpdater:
             # Create Excel image from final path (avoiding PIL altogether)
             excel_img = ExcelImage(final_image_path)
             
+            # Apply width-constrained resizing with aspect ratio preservation
+            target_width_points = 200  # Target width in points
+            target_width_pixels = target_width_points * 1.33  # Convert to pixels
+            
+            # Calculate proper height based on original aspect ratio
+            original_width, original_height = original_size
+            aspect_ratio = original_height / original_width
+            target_height_pixels = target_width_pixels * aspect_ratio
+            
+            # Set both width and height explicitly to maintain aspect ratio
+            excel_img.width = target_width_pixels
+            excel_img.height = target_height_pixels
+            
             # Position at target cell
             row, col = self._parse_cell_address(cell_address)
             excel_img.anchor = f"{get_column_letter(col)}{row}"
@@ -903,10 +916,10 @@ class ExcelUpdater:
             # Explicitly ensure cell remains empty - no text pollution
             sheet[cell_address].value = None
             
-            # Adjust row height based on original size
-            self._adjust_row_height(sheet, row, original_size[1])
+            # Adjust row height based on new calculated height
+            self._adjust_row_height(sheet, row, target_height_pixels)
             
-            self._log_success(f"Inserted image at {cell_address} (size: {original_size[0]}x{original_size[1]})")
+            self._log_success(f"Inserted image at {cell_address} (original: {original_size[0]}x{original_size[1]}, resized: {target_width_pixels:.0f}x{target_height_pixels:.0f}px)")
             return True
             
         except Exception as e:
