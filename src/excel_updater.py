@@ -142,6 +142,10 @@ class ExcelUpdater:
             self._update_table_with_offsets(
                 sheet, base_row, base_col, update_config, data
             )
+        elif subtable_type == "matrix_table":
+            self._update_matrix_table_with_offsets(
+                sheet, base_row, base_col, update_config, data
+            )
 
     def _find_update_location(
         self, sheet: Worksheet, header_search_config: Dict[str, Any]
@@ -313,6 +317,116 @@ class ExcelUpdater:
                         self._update_cell(
                             sheet, cell_address, row_data[field_name], field_type
                         )
+
+    def _update_matrix_table_with_offsets(
+        self,
+        sheet: Worksheet,
+        base_row: int,
+        base_col: int,
+        config: Dict[str, Any],
+        data: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """Update matrix table data with offset support.
+
+        Expects data in format: {row_key: {col_key: value}}
+        """
+        column_mappings = config["column_mappings"]
+        row_key_mappings = config.get("row_key_mappings", {})
+
+        headers_row = base_row + config.get("headers_row_offset", 0)
+        data_start_row = headers_row + config.get("data_row_offset", 1)
+
+        # Support for column offset - allows table to start in different column than search text
+        headers_col_offset = config.get("headers_col_offset", 0)
+        header_col = base_col + headers_col_offset
+
+        # Row keys are in the first column of the data area
+        row_keys_col_offset = config.get("row_keys_col_offset", 0)
+        row_keys_col = header_col + row_keys_col_offset
+
+        # Data starts in the column after row keys
+        data_col_offset = config.get("data_col_offset", 1)
+        data_start_col = row_keys_col + data_col_offset
+
+        max_rows = config.get("max_rows", 1000)
+
+        # Create reverse mapping for row keys (JSON key -> Excel key)
+        reverse_row_key_mappings = {}
+        for excel_key, json_key in row_key_mappings.items():
+            reverse_row_key_mappings[json_key] = excel_key
+
+        # Create reverse mapping for column headers (JSON key -> Excel key)
+        reverse_column_mappings = {}
+        for excel_key, mapping in column_mappings.items():
+            if isinstance(mapping, str):
+                json_key = mapping
+            else:
+                json_key = mapping.get("name")
+            if json_key:
+                reverse_column_mappings[json_key] = excel_key
+
+        # Update data for each row
+        for json_row_key, row_data in data.items():
+            if json_row_key == "_field_types":  # Skip metadata
+                continue
+
+            # Find the Excel row for this row key
+            target_row = None
+
+            # Look for the row key in the Excel sheet
+            for row_offset in range(max_rows):
+                row = data_start_row + row_offset
+                row_key_cell = sheet.cell(row=row, column=row_keys_col)
+
+                if row_key_cell.value:
+                    excel_row_key = str(row_key_cell.value).strip()
+
+                    # Check if this matches our target row key (either directly or through mapping)
+                    if (
+                        excel_row_key == json_row_key
+                        or reverse_row_key_mappings.get(json_row_key) == excel_row_key
+                    ):
+                        target_row = row
+                        break
+
+            if target_row is None:
+                self._log_error(f"Row key '{json_row_key}' not found in matrix table")
+                continue
+
+            # Update cells in this row
+            for json_col_key, value in row_data.items():
+                # Find the Excel column for this column key
+                target_col = None
+
+                # Get the column header mapping
+                excel_col_key = reverse_column_mappings.get(json_col_key, json_col_key)
+
+                # Find the column in the header row
+                header_col_found = self._find_header_column(
+                    sheet, headers_row, excel_col_key, config, data_start_col
+                )
+
+                if header_col_found:
+                    target_col = header_col_found
+                else:
+                    self._log_error(
+                        f"Column '{json_col_key}' (Excel: '{excel_col_key}') not found in matrix table"
+                    )
+                    continue
+
+                # Get field type from column mappings
+                if excel_col_key in column_mappings:
+                    mapping = column_mappings[excel_col_key]
+                    if isinstance(mapping, str):
+                        field_type = "text"
+                    else:
+                        field_type = mapping.get("type", "text")
+                else:
+                    field_type = "text"
+
+                # Update the cell
+                cell_address = f"{get_column_letter(target_col)}{target_row}"
+                self._update_cell(sheet, cell_address, value, field_type)
 
     def _update_cell(
         self, sheet: Worksheet, cell_address: str, value: Any, field_type: str

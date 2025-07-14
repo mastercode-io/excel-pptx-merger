@@ -31,8 +31,11 @@ logger = logging.getLogger(__name__)
 class ExcelProcessor:
     """Processes Excel files and extracts data according to configuration."""
 
-    def __init__(self, file_input: Union[str, BinaryIO], 
-                 graph_credentials: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        file_input: Union[str, BinaryIO],
+        graph_credentials: Optional[Dict[str, str]] = None,
+    ) -> None:
         """Initialize Excel processor with file path or file-like object."""
         self.file_input = file_input
         self.file_path = None
@@ -42,13 +45,13 @@ class ExcelProcessor:
         self._memory_file = None
         self._image_cache = {}
         self._range_exporter = None
-        
+
         # Initialize range exporter if credentials provided
         if graph_credentials:
             self._range_exporter = ExcelRangeExporter(
                 client_id=graph_credentials.get("client_id", ""),
                 client_secret=graph_credentials.get("client_secret", ""),
-                tenant_id=graph_credentials.get("tenant_id", "")
+                tenant_id=graph_credentials.get("tenant_id", ""),
             )
 
         if self._is_memory_file:
@@ -174,8 +177,10 @@ class ExcelProcessor:
         return list(self.workbook.sheetnames)
 
     def extract_data(
-        self, global_settings: Dict[str, Any], sheet_config: Dict[str, Any],
-        full_config: Optional[Dict[str, Any]] = None
+        self,
+        global_settings: Dict[str, Any],
+        sheet_config: Dict[str, Any],
+        full_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Extract data from Excel sheet according to configuration.
 
@@ -205,10 +210,15 @@ class ExcelProcessor:
 
             # Extract range images if configured and enabled
             range_images = {}
-            if (full_config and "range_images" in full_config and 
-                global_settings.get("range_images", {}).get("enabled", True)):
+            if (
+                full_config
+                and "range_images" in full_config
+                and global_settings.get("range_images", {}).get("enabled", True)
+            ):
                 try:
-                    range_images = self._extract_range_images(full_config["range_images"])
+                    range_images = self._extract_range_images(
+                        full_config["range_images"]
+                    )
                     logger.info(f"Extracted {len(range_images)} range images")
                 except Exception as e:
                     logger.warning(f"Failed to extract range images: {e}")
@@ -295,6 +305,10 @@ class ExcelProcessor:
             )
         elif subtable_type == "table":
             return self._extract_table_data(
+                worksheet, header_location, data_extraction, images
+            )
+        elif subtable_type == "matrix_table":
+            return self._extract_matrix_table_data(
                 worksheet, header_location, data_extraction, images
             )
         else:
@@ -600,6 +614,159 @@ class ExcelProcessor:
 
         except Exception as e:
             raise ExcelProcessingError(f"Failed to extract table data: {e}")
+
+    def _extract_matrix_table_data(
+        self,
+        worksheet: Worksheet,
+        header_location: Tuple[int, int],
+        config: Dict[str, Any],
+        images: Optional[List[Dict]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Extract matrix table data with row keys and column headers.
+
+        Returns nested dictionary: {row_key: {col_key: value}}
+        """
+        header_row, header_col = header_location
+        headers_row = header_row + config.get("headers_row_offset", 0)
+        data_start_row = headers_row + config.get("data_row_offset", 1)
+
+        # Support for column offset - allows table to start in different column than search text
+        headers_col_offset = config.get("headers_col_offset", 0)
+        header_col = header_col + headers_col_offset
+
+        # Row keys are in the first column of the data area
+        row_keys_col_offset = config.get("row_keys_col_offset", 0)
+        row_keys_col = header_col + row_keys_col_offset
+
+        # Data starts in the column after row keys
+        data_col_offset = config.get("data_col_offset", 1)
+        data_start_col = row_keys_col + data_col_offset
+
+        max_columns = config.get("max_columns", 20)
+        max_rows = config.get("max_rows", 1000)
+        column_mappings = config.get("column_mappings", {})
+        row_key_mappings = config.get("row_key_mappings", {})
+
+        try:
+            # Extract column headers
+            headers = []
+            original_headers = []
+            field_types = {}
+
+            for col_offset in range(max_columns):
+                col = data_start_col + col_offset
+                header_cell = worksheet.cell(row=headers_row, column=col)
+
+                if header_cell.value and not is_empty_cell_value(header_cell.value):
+                    header = str(header_cell.value).strip()
+                    original_headers.append(header)
+
+                    # Apply column mapping if available
+                    if header in column_mappings:
+                        mapping = column_mappings[header]
+                        if isinstance(mapping, str):
+                            mapped_header = mapping
+                            field_type = "text"
+                        else:
+                            mapped_header = mapping.get(
+                                "name", normalize_column_name(header)
+                            )
+                            field_type = mapping.get("type", "text")
+                    else:
+                        mapped_header = normalize_column_name(header)
+                        field_type = "text"
+
+                    headers.append(mapped_header)
+                    field_types[mapped_header] = field_type
+                else:
+                    break
+
+            if not headers:
+                logger.warning("No column headers found for matrix table extraction")
+                return {}
+
+            # Extract matrix data
+            matrix_data = {}
+            consecutive_empty_rows = 0
+
+            for row_offset in range(max_rows):
+                row = data_start_row + row_offset
+
+                # Get row key from first column
+                row_key_cell = worksheet.cell(row=row, column=row_keys_col)
+
+                if not row_key_cell.value or is_empty_cell_value(row_key_cell.value):
+                    consecutive_empty_rows += 1
+                    if (
+                        consecutive_empty_rows >= 3
+                    ):  # Stop after 3 consecutive empty rows
+                        break
+                    continue
+
+                consecutive_empty_rows = 0
+                original_row_key = str(row_key_cell.value).strip()
+
+                # Apply row key mapping if available
+                if original_row_key in row_key_mappings:
+                    mapped_row_key = row_key_mappings[original_row_key]
+                else:
+                    mapped_row_key = normalize_column_name(original_row_key)
+
+                # Extract row data
+                row_data = {}
+                has_data = False
+
+                for col_offset, (header, original_header) in enumerate(
+                    zip(headers, original_headers)
+                ):
+                    col = data_start_col + col_offset
+                    cell = worksheet.cell(row=row, column=col)
+                    value = cell.value
+
+                    # Check for image at this cell position
+                    image_data = None
+                    if images:
+                        image_data = self._get_image_at_position(row, col, images)
+
+                    # Handle mixed content (text + image), image only, or text only
+                    if image_data and not is_empty_cell_value(value):
+                        # Mixed content: both text and image
+                        cell_value = {"text": value, "base64": image_data["base64"]}
+                        if "path" in image_data:
+                            cell_value["path"] = image_data["path"]
+                        has_data = True
+                    elif image_data:
+                        # Image only
+                        cell_value = image_data
+                        has_data = True
+                    else:
+                        # Check for potential cell-embedded images
+                        cell_embedded_info = self._check_for_cell_embedded_image(
+                            cell, row, col
+                        )
+                        if cell_embedded_info:
+                            cell_value = cell_embedded_info
+                            has_data = True
+                        else:
+                            # Regular text/value
+                            cell_value = value
+                            if not is_empty_cell_value(value):
+                                has_data = True
+
+                    row_data[header] = cell_value
+
+                # Only add rows with actual data
+                if has_data:
+                    matrix_data[mapped_row_key] = row_data
+
+            # Add field types metadata
+            if field_types:
+                matrix_data["_field_types"] = field_types
+
+            return matrix_data
+
+        except Exception as e:
+            raise ExcelProcessingError(f"Failed to extract matrix table data: {e}")
 
     def extract_images(
         self, session_dir: Optional[str] = None
@@ -1758,51 +1925,59 @@ class ExcelProcessor:
 
         return config
 
-    def _extract_range_images(self, range_configs_data: List[Dict[str, Any]]) -> Dict[str, str]:
+    def _extract_range_images(
+        self, range_configs_data: List[Dict[str, Any]]
+    ) -> Dict[str, str]:
         """Extract range images using Graph API.
-        
+
         Args:
             range_configs_data: List of range image configurations
-            
+
         Returns:
             Dictionary mapping field_name to image file path
         """
         if not self._range_exporter:
-            logger.warning("Range exporter not initialized - Graph API credentials required")
+            logger.warning(
+                "Range exporter not initialized - Graph API credentials required"
+            )
             return {}
-            
+
         if not range_configs_data:
             return {}
-            
+
         try:
             # Validate and create range configurations
             range_configs = create_range_configs_from_dict(range_configs_data)
             logger.info(f"Processing {len(range_configs)} range image configurations")
-            
+
             # Get the Excel file path for upload
             excel_file_path = self._get_excel_file_path()
             if not excel_file_path:
                 logger.error("Cannot determine Excel file path for range image export")
                 return {}
-            
+
             # Export ranges as images
             results = self._range_exporter.export_ranges(excel_file_path, range_configs)
-            
+
             # Process results and return mapping
             range_images = {}
             for result in results:
                 if result.success:
                     range_images[result.field_name] = result.image_path
-                    logger.info(f"Successfully exported range image: {result.field_name} -> {result.image_path}")
+                    logger.info(
+                        f"Successfully exported range image: {result.field_name} -> {result.image_path}"
+                    )
                 else:
-                    logger.error(f"Failed to export range image '{result.field_name}': {result.error_message}")
-            
+                    logger.error(
+                        f"Failed to export range image '{result.field_name}': {result.error_message}"
+                    )
+
             return range_images
-            
+
         except Exception as e:
             logger.error(f"Error during range image extraction: {e}")
             return {}
-    
+
     def _get_excel_file_path(self) -> Optional[str]:
         """Get the Excel file path for range export operations."""
         if self._is_memory_file:
@@ -1810,13 +1985,18 @@ class ExcelProcessor:
             if self._memory_file:
                 try:
                     import tempfile
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=".xlsx"
+                    ) as tmp_file:
                         tmp_file.write(self._memory_file.getvalue())
                         temp_path = tmp_file.name
                     logger.info(f"Created temporary file for range export: {temp_path}")
                     return temp_path
                 except Exception as e:
-                    logger.error(f"Failed to create temporary file for range export: {e}")
+                    logger.error(
+                        f"Failed to create temporary file for range export: {e}"
+                    )
                     return None
             return None
         else:
