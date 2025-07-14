@@ -1114,6 +1114,7 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
         excel_data = None
         update_data = None
         config = None
+        include_update_log = False
         
         if is_json_request:
             # JSON MODE: Everything as base64 strings
@@ -1153,11 +1154,13 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
                         ValidationError(f"Invalid base64 Excel file: {e}"), 400
                     )
                 
-                # Extract update data and config directly from JSON
+                # Extract update data, config, and include_update_log directly from JSON
                 update_data = json_data.get('update_data', {})
                 config = json_data.get('config', {})
+                include_update_log = json_data.get('include_update_log', False)
                 
                 logger.info(f"JSON mode - Update data fields: {list(update_data.keys()) if isinstance(update_data, dict) else 'not a dict'}")
+                logger.info(f"JSON mode - Include update log: {include_update_log}")
                 logger.info("JSON mode processing completed successfully")
                 
             except json.JSONDecodeError as e:
@@ -1194,17 +1197,20 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
                 
             excel_file = request.files["excel_file"]
             
-            # Get update data and config from form fields
+            # Get update data, config, and include_update_log from form fields
             update_data_str = request.form.get("update_data", "{}")
             config_str = request.form.get("config", "{}")
+            include_update_log_str = request.form.get("include_update_log", "false")
             
             logger.info(f"Update data string size: {len(update_data_str)} bytes")
             logger.info(f"Config string size: {len(config_str)} bytes")
+            logger.info(f"Include update log: {include_update_log_str}")
             
             # Parse JSON from form fields
             try:
                 update_data = json.loads(update_data_str)
                 config = json.loads(config_str)
+                include_update_log = include_update_log_str.lower() in ('true', '1', 'yes', 'on')
                 logger.info("Successfully parsed JSON data from form fields")
             except json.JSONDecodeError as e:
                 logger.error(f"JSON parsing failed: {e}")
@@ -1250,7 +1256,7 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
         # Update Excel file (same process for both modes)
         updater = ExcelUpdater(excel_path)
         try:
-            updated_path = updater.update_excel(update_data, config)
+            updated_path = updater.update_excel(update_data, config, include_update_log)
             
             # Return updated file
             return send_file(
