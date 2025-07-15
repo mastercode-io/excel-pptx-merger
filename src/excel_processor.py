@@ -476,13 +476,19 @@ class ExcelProcessor:
                             mapped_key = normalize_column_name(original_key)
                             field_type = "text"  # Default type
 
-                        # Handle image fields specially
+                        # Handle special field types
                         if field_type == "image":
                             # For image fields, we need to find the image at this position
                             # Store the exact cell position where this image field should be located
                             # Also store the original text value as fallback
                             data[mapped_key] = None
                             field_positions[mapped_key] = {"row": values_row, "col": col, "text_fallback": value}
+                        elif field_type == "link":
+                            # For link fields, create structured data with title and link
+                            data[mapped_key] = {
+                                "title": original_key,  # Use field name as display text
+                                "link": str(value) if value is not None else ""  # Use cell value as URL
+                            }
                         else:
                             data[mapped_key] = value
 
@@ -520,13 +526,19 @@ class ExcelProcessor:
                             mapped_key = normalize_column_name(original_key)
                             field_type = "text"  # Default type
 
-                        # Handle image fields specially
+                        # Handle special field types
                         if field_type == "image":
                             # For image fields, we need to find the image at this position
                             # Store the exact cell position where this image field should be located
                             # Also store the original text value as fallback
                             data[mapped_key] = None
                             field_positions[mapped_key] = {"row": row, "col": values_col, "text_fallback": value}
+                        elif field_type == "link":
+                            # For link fields, create structured data with title and link
+                            data[mapped_key] = {
+                                "title": original_key,  # Use field name as display text
+                                "link": str(value) if value is not None else ""  # Use cell value as URL
+                            }
                         else:
                             data[mapped_key] = value
 
