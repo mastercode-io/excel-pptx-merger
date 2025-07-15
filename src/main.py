@@ -46,7 +46,9 @@ app_config = config_manager.get_app_config()
 # Configure Flask app
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = app_config["max_file_size_mb"] * 1024 * 1024
-app.config["MAX_FORM_MEMORY_SIZE"] = 10 * 1024 * 1024  # 10MB for form fields (was 500KB default)
+app.config["MAX_FORM_MEMORY_SIZE"] = (
+    10 * 1024 * 1024
+)  # 10MB for form fields (was 500KB default)
 
 
 def setup_logging() -> None:
@@ -63,13 +65,17 @@ def setup_logging() -> None:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logging.getLogger().addHandler(console_handler)
-    
+
     # Log Flask configuration limits
     max_content_length = app.config.get("MAX_CONTENT_LENGTH", 0)
     max_form_memory_size = app.config.get("MAX_FORM_MEMORY_SIZE", 0)
-    
-    logger.info(f"Flask configuration - MAX_CONTENT_LENGTH: {max_content_length / (1024*1024):.1f}MB")
-    logger.info(f"Flask configuration - MAX_FORM_MEMORY_SIZE: {max_form_memory_size / (1024*1024):.1f}MB")
+
+    logger.info(
+        f"Flask configuration - MAX_CONTENT_LENGTH: {max_content_length / (1024*1024):.1f}MB"
+    )
+    logger.info(
+        f"Flask configuration - MAX_FORM_MEMORY_SIZE: {max_form_memory_size / (1024*1024):.1f}MB"
+    )
 
 
 def authenticate_request() -> bool:
@@ -123,40 +129,42 @@ def create_error_response(
 def handle_file_too_large(error):
     """Handle file size too large error with detailed diagnostics."""
     # Enhanced logging for 413 errors
-    content_type = request.headers.get('Content-Type', 'Unknown')
-    content_length = request.headers.get('Content-Length', 'Unknown')
-    user_agent = request.headers.get('User-Agent', 'Unknown')
+    content_type = request.headers.get("Content-Type", "Unknown")
+    content_length = request.headers.get("Content-Length", "Unknown")
+    user_agent = request.headers.get("User-Agent", "Unknown")
     request_path = request.path
-    
+
     logger.error(f"413 Error - Request too large:")
     logger.error(f"  Path: {request_path}")
     logger.error(f"  Content-Type: {content_type}")
     logger.error(f"  Content-Length header: {content_length}")
     logger.error(f"  User-Agent: {user_agent}")
     logger.error(f"  Max allowed size: {app_config['max_file_size_mb']}MB")
-    
+
     # Calculate size in MB if content-length is available
     size_info = ""
-    if content_length != 'Unknown' and content_length.isdigit():
+    if content_length != "Unknown" and content_length.isdigit():
         size_mb = int(content_length) / (1024 * 1024)
         size_info = f" (Request size: {size_mb:.2f}MB)"
         logger.error(f"  Actual request size: {size_mb:.2f}MB")
-    
+
     # Check if this might be a CRM-specific issue
     is_likely_crm = False
-    if user_agent != 'Unknown':
-        crm_indicators = ['deluge', 'zoho', 'crm', 'automation', 'webhook']
-        is_likely_crm = any(indicator in user_agent.lower() for indicator in crm_indicators)
-    
+    if user_agent != "Unknown":
+        crm_indicators = ["deluge", "zoho", "crm", "automation", "webhook"]
+        is_likely_crm = any(
+            indicator in user_agent.lower() for indicator in crm_indicators
+        )
+
     if is_likely_crm:
         logger.error("  Potential CRM/automation request detected")
-    
+
     # Create enhanced error message
     error_message = f"Request size exceeds maximum allowed size of {app_config['max_file_size_mb']}MB{size_info}"
-    
+
     if is_likely_crm:
         error_message += ". Note: CRM systems may inflate request size due to base64 encoding or additional metadata."
-    
+
     return create_error_response(
         ValidationError(error_message),
         413,
@@ -239,9 +247,13 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         graph_credentials = get_graph_api_credentials()
         if graph_credentials:
             logger.info("Graph API credentials loaded - range image extraction enabled")
-            logger.debug(f"Loaded credentials: client_id={graph_credentials.get('client_id', '')[:8]}...")
+            logger.debug(
+                f"Loaded credentials: client_id={graph_credentials.get('client_id', '')[:8]}..."
+            )
         else:
-            logger.info("Graph API credentials not found - range image extraction disabled")
+            logger.info(
+                "Graph API credentials not found - range image extraction disabled"
+            )
 
         # Get extraction configuration
         extraction_config = {}
@@ -257,7 +269,9 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         # If no configuration provided, use auto-detection
         if not extraction_config:
             logger.debug("No configuration provided, using auto-detection")
-            excel_processor_for_detection = ExcelProcessor(excel_file, graph_credentials)
+            excel_processor_for_detection = ExcelProcessor(
+                excel_file, graph_credentials
+            )
 
             try:
                 extraction_config = (
@@ -312,7 +326,7 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 extracted_data = excel_processor.extract_data(
                     extraction_config.get("global_settings", {}),
                     extraction_config.get("sheet_configs", {}),
-                    extraction_config
+                    extraction_config,
                 )
                 logger.info(f"Successfully extracted data from Excel file")
             except Exception as e:
@@ -551,7 +565,7 @@ def preview_merge() -> Tuple[Dict[str, Any], int]:
             extracted_data = excel_processor.extract_data(
                 extraction_config.get("global_settings", {}),
                 extraction_config.get("sheet_configs", {}),
-                extraction_config
+                extraction_config,
             )
 
             # Extract images with position information
@@ -1086,58 +1100,154 @@ def get_stats() -> Tuple[Dict[str, Any], int]:
         return create_error_response(e, 500)
 
 
+@app.route("/api/v1/diagnose", methods=["POST"])
+def diagnose_template() -> Tuple[Dict[str, Any], int]:
+    """Diagnose PowerPoint template merge fields."""
+    if not authenticate_request():
+        return create_error_response(
+            AuthenticationError("Authentication required"), 401
+        )
+
+    temp_manager = None
+
+    try:
+        # Validate request
+        if "powerpoint_file" not in request.files:
+            return create_error_response(
+                ValidationError("PowerPoint template file is required"), 400
+            )
+
+        powerpoint_file = request.files["powerpoint_file"]
+        if not powerpoint_file.filename:
+            return create_error_response(
+                ValidationError("PowerPoint template filename is required"), 400
+            )
+
+        # Initialize temp file manager
+        temp_manager = TempFileManager()
+        temp_dir = temp_manager.create_temp_directory()
+
+        # Save uploaded PowerPoint file
+        pptx_filename = f"template_{uuid.uuid4().hex[:8]}.pptx"
+        pptx_file_path = os.path.join(temp_dir, pptx_filename)
+        
+        # Save the uploaded file
+        powerpoint_file.save(pptx_file_path)
+
+        # Process template with PowerPoint processor
+        from .pptx_processor import PowerPointProcessor
+        from .utils.exceptions import PowerPointProcessingError
+
+        processor = PowerPointProcessor(pptx_file_path)
+
+        # Get all merge fields from the template
+        all_fields = processor.get_merge_fields()
+
+        # Get slide-specific merge fields
+        slide_fields = {}
+
+        if processor.presentation:
+            for slide_idx, slide in enumerate(processor.presentation.slides):
+                slide_number = slide_idx + 1
+                fields = processor._extract_slide_merge_fields(slide)
+                slide_fields[f"slide_{slide_number}"] = sorted(fields)
+
+        # Build response
+        response = {
+            "success": True,
+            "template_filename": powerpoint_file.filename,
+            "total_slides": (
+                len(processor.presentation.slides) if processor.presentation else 0
+            ),
+            "all_merge_fields": sorted(all_fields),
+            "slide_fields": slide_fields,
+            "summary": {
+                "total_unique_fields": len(all_fields),
+                "slides_with_fields": len([s for s in slide_fields.values() if s]),
+                "slides_without_fields": len(
+                    [s for s in slide_fields.values() if not s]
+                ),
+            },
+        }
+
+        return response, 200
+
+    except PowerPointProcessingError as e:
+        return create_error_response(e, 400)
+    except ValidationError as e:
+        return create_error_response(e, 400)
+    except Exception as e:
+        return create_error_response(e, 500)
+    finally:
+        # Clean up temporary files
+        if temp_manager:
+            temp_manager.cleanup_all()
+
+
 @app.route("/api/v1/update", methods=["POST"])
 def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
     """Update Excel file with provided data - supports both multipart and JSON modes."""
     temp_manager = None
-    
+
     try:
         # Enhanced request logging for debugging
-        content_type = request.headers.get('Content-Type', 'Not specified')
-        content_length = request.headers.get('Content-Length', 'Not specified')
-        user_agent = request.headers.get('User-Agent', 'Not specified')
-        
-        logger.info(f"Update request received - Content-Type: {content_type}, Content-Length: {content_length}")
+        content_type = request.headers.get("Content-Type", "Not specified")
+        content_length = request.headers.get("Content-Length", "Not specified")
+        user_agent = request.headers.get("User-Agent", "Not specified")
+
+        logger.info(
+            f"Update request received - Content-Type: {content_type}, Content-Length: {content_length}"
+        )
         logger.info(f"Update request User-Agent: {user_agent}")
-        
+
         # Enhanced dual mode detection - handle incorrect Content-Type from CRM systems
         is_json_request = request.is_json
         has_form_data = bool(request.form)
         has_files = bool(request.files)
-        
+
         # Fallback JSON detection for CRM systems that send JSON with wrong Content-Type
         if not is_json_request and request.data and not has_form_data and not has_files:
             try:
                 # Try to parse raw request data as JSON
                 json.loads(request.data)
                 is_json_request = True
-                logger.info(f"Detected JSON payload despite Content-Type: {content_type}")
+                logger.info(
+                    f"Detected JSON payload despite Content-Type: {content_type}"
+                )
             except json.JSONDecodeError:
                 logger.debug("Raw request data is not valid JSON")
-        
-        logger.info(f"Request analysis - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}")
-        
+
+        logger.info(
+            f"Request analysis - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}"
+        )
+
         # Log Content-Type detection issues
         if is_json_request and not request.is_json:
-            logger.warning(f"JSON payload detected with non-standard Content-Type: {content_type}")
-        elif content_type.startswith('text/plain') and request.data:
-            logger.info(f"text/plain Content-Type with {len(request.data)} bytes of data")
-        
+            logger.warning(
+                f"JSON payload detected with non-standard Content-Type: {content_type}"
+            )
+        elif content_type.startswith("text/plain") and request.data:
+            logger.info(
+                f"text/plain Content-Type with {len(request.data)} bytes of data"
+            )
+
         # Log request size breakdown
-        if hasattr(request, 'content_length') and request.content_length:
-            logger.info(f"Actual request content length: {request.content_length} bytes ({request.content_length / (1024*1024):.2f} MB)")
-        
+        if hasattr(request, "content_length") and request.content_length:
+            logger.info(
+                f"Actual request content length: {request.content_length} bytes ({request.content_length / (1024*1024):.2f} MB)"
+            )
+
         # Initialize variables for unified processing
         excel_file = None
         excel_data = None
         update_data = None
         config = None
         include_update_log = False
-        
+
         if is_json_request:
             # JSON MODE: Everything as base64 strings
             logger.info("Processing request in JSON mode (base64 Excel file)")
-            
+
             try:
                 # Handle both standard JSON requests and CRM systems with wrong Content-Type
                 if request.is_json:
@@ -1145,59 +1255,66 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
                 else:
                     # Parse raw data for systems that send JSON with text/plain Content-Type
                     json_data = json.loads(request.data)
-                    logger.info("Parsed JSON from raw request data due to incorrect Content-Type")
-                
+                    logger.info(
+                        "Parsed JSON from raw request data due to incorrect Content-Type"
+                    )
+
                 if not json_data:
                     return create_error_response(
                         ValidationError("JSON payload is required"), 400
                     )
-                
+
                 # Extract Excel file from base64
-                excel_file_b64 = json_data.get('excel_file')
+                excel_file_b64 = json_data.get("excel_file")
                 if not excel_file_b64:
                     return create_error_response(
-                        ValidationError("excel_file (base64) is required in JSON mode"), 400
+                        ValidationError("excel_file (base64) is required in JSON mode"),
+                        400,
                     )
-                
+
                 logger.info(f"Base64 Excel file size: {len(excel_file_b64)} characters")
-                
+
                 # Decode base64 Excel file
                 try:
                     excel_data = base64.b64decode(excel_file_b64)
                     excel_file = io.BytesIO(excel_data)
-                    excel_file.filename = json_data.get('filename', 'uploaded_file.xlsx')
+                    excel_file.filename = json_data.get(
+                        "filename", "uploaded_file.xlsx"
+                    )
                     logger.info(f"Decoded Excel file size: {len(excel_data)} bytes")
                 except Exception as e:
                     return create_error_response(
                         ValidationError(f"Invalid base64 Excel file: {e}"), 400
                     )
-                
+
                 # Extract update data, config, and include_update_log directly from JSON
-                update_data = json_data.get('update_data', {})
-                config = json_data.get('config', {})
-                include_update_log = json_data.get('include_update_log', False)
-                
-                logger.info(f"JSON mode - Update data fields: {list(update_data.keys()) if isinstance(update_data, dict) else 'not a dict'}")
+                update_data = json_data.get("update_data", {})
+                config = json_data.get("config", {})
+                include_update_log = json_data.get("include_update_log", False)
+
+                logger.info(
+                    f"JSON mode - Update data fields: {list(update_data.keys()) if isinstance(update_data, dict) else 'not a dict'}"
+                )
                 logger.info(f"JSON mode - Include update log: {include_update_log}")
                 logger.info("JSON mode processing completed successfully")
-                
+
             except json.JSONDecodeError as e:
                 return create_error_response(
                     ValidationError(f"Invalid JSON format: {e}"), 400
                 )
-                
+
         else:
             # MULTIPART MODE: Binary file + JSON form fields
             logger.info("Processing request in multipart mode (binary Excel file)")
-            
+
             # Log form fields for debugging
             if has_form_data:
                 form_fields = list(request.form.keys())
                 logger.info(f"Form fields present: {form_fields}")
                 for field in form_fields:
-                    field_size = len(request.form.get(field, ''))
+                    field_size = len(request.form.get(field, ""))
                     logger.info(f"Form field '{field}' size: {field_size} bytes")
-            
+
             # Log file information
             if has_files:
                 file_info = []
@@ -1205,30 +1322,35 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
                     file_obj = request.files[file_key]
                     file_info.append(f"{file_key}: {file_obj.filename}")
                 logger.info(f"Files in request: {file_info}")
-            
+
             # Validate Excel file presence
             if "excel_file" not in request.files:
                 logger.error("Excel file missing from multipart request")
                 return create_error_response(
                     ValidationError("Excel file is required"), 400
                 )
-                
+
             excel_file = request.files["excel_file"]
-            
+
             # Get update data, config, and include_update_log from form fields
             update_data_str = request.form.get("update_data", "{}")
             config_str = request.form.get("config", "{}")
             include_update_log_str = request.form.get("include_update_log", "false")
-            
+
             logger.info(f"Update data string size: {len(update_data_str)} bytes")
             logger.info(f"Config string size: {len(config_str)} bytes")
             logger.info(f"Include update log: {include_update_log_str}")
-            
+
             # Parse JSON from form fields
             try:
                 update_data = json.loads(update_data_str)
                 config = json.loads(config_str)
-                include_update_log = include_update_log_str.lower() in ('true', '1', 'yes', 'on')
+                include_update_log = include_update_log_str.lower() in (
+                    "true",
+                    "1",
+                    "yes",
+                    "on",
+                )
                 logger.info("Successfully parsed JSON data from form fields")
             except json.JSONDecodeError as e:
                 logger.error(f"JSON parsing failed: {e}")
@@ -1237,59 +1359,65 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
                 return create_error_response(
                     ValidationError(f"Invalid JSON format: {e}"), 400
                 )
-        
+
         # UNIFIED PROCESSING PATH: Both modes now have same data structure
         # At this point we have:
         # - excel_file: file-like object (either uploaded file or BytesIO from base64)
         # - update_data: dict with data to update
         # - config: dict with configuration
-        
+
         # Validate file
-        if not excel_file or not hasattr(excel_file, 'filename') or not excel_file.filename:
+        if (
+            not excel_file
+            or not hasattr(excel_file, "filename")
+            or not excel_file.filename
+        ):
             return create_error_response(
                 ValidationError("No file selected or invalid file"), 400
             )
-            
+
         logger.info(f"Processing Excel update request for file: {excel_file.filename}")
-        logger.info(f"Mode: {'JSON (base64)' if is_json_request else 'Multipart (binary)'}")
-        
+        logger.info(
+            f"Mode: {'JSON (base64)' if is_json_request else 'Multipart (binary)'}"
+        )
+
         # Setup temp file management
         temp_manager = TempFileManager(app_config["temp_file_cleanup"])
         temp_dir = temp_manager.create_temp_directory()
-        
+
         # Save Excel file to temp directory (works for both modes)
         excel_filename = f"input_{uuid.uuid4().hex[:8]}.xlsx"
         excel_path = os.path.join(temp_dir, excel_filename)
-        
+
         if is_json_request:
             # For JSON mode: write decoded bytes to file
-            with open(excel_path, 'wb') as f:
+            with open(excel_path, "wb") as f:
                 f.write(excel_data)
             logger.info(f"Saved base64-decoded Excel file to: {excel_path}")
         else:
             # For multipart mode: save uploaded file
             excel_file.save(excel_path)
             logger.info(f"Saved uploaded Excel file to: {excel_path}")
-        
+
         # Update Excel file (same process for both modes)
         updater = ExcelUpdater(excel_path)
         try:
             updated_path = updater.update_excel(update_data, config, include_update_log)
-            
+
             # Return updated file
             return send_file(
                 updated_path,
                 as_attachment=True,
                 download_name=f"updated_{excel_file.filename}",
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            
+
         except Exception as e:
             logger.error(f"Excel update failed: {e}")
             return create_error_response(e, 400)
         finally:
             updater.close()
-        
+
     except Exception as e:
         logger.error(f"Update endpoint error: {e}")
         return create_error_response(e, 500)
@@ -1540,10 +1668,17 @@ def cli():
     "--debug-images/--no-debug-images", default=False, help="Save debug images"
 )
 @click.option(
-    "--debug-range-images/--no-debug-range-images", default=False, help="Enable enhanced range image debugging"
+    "--debug-range-images/--no-debug-range-images",
+    default=False,
+    help="Enable enhanced range image debugging",
 )
 def merge_cli(
-    excel_file, pptx_file, output_file=None, config_file=None, debug_images=False, debug_range_images=False
+    excel_file,
+    pptx_file,
+    output_file=None,
+    config_file=None,
+    debug_images=False,
+    debug_range_images=False,
 ):
     """Merge Excel data into PowerPoint template."""
     try:
@@ -1554,7 +1689,7 @@ def merge_cli(
             logging.getLogger("src.pptx_processor").setLevel(logging.WARNING)
             logging.getLogger("PIL").setLevel(logging.WARNING)
             logging.getLogger("matplotlib").setLevel(logging.WARNING)
-        
+
         # Load extraction configuration if provided
         extraction_config = {}
         if config_file:
@@ -1592,7 +1727,7 @@ def merge_cli(
                 extracted_data = excel_processor.extract_data(
                     extraction_config.get("global_settings", {}),
                     extraction_config.get("sheet_configs", {}),
-                    extraction_config
+                    extraction_config,
                 )
 
                 # Extract images with enhanced position information
@@ -1645,15 +1780,101 @@ def merge_cli(
         return 1
 
 
+@cli.command("diagnose")
+@click.option(
+    "--template",
+    "-t",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to PowerPoint template file",
+)
+@click.option(
+    "--output", "-o", required=False, help="Output file path (default: print to stdout)"
+)
+@click.option("--pretty", is_flag=True, help="Pretty print JSON output")
+def diagnose_cli(template: str, output: str = None, pretty: bool = False) -> None:
+    """Diagnose PowerPoint template merge fields."""
+    try:
+        from .pptx_processor import PowerPointProcessor
+
+        # Process template with PowerPoint processor
+        processor = PowerPointProcessor(template)
+
+        # Get all merge fields from the template
+        all_fields = processor.get_merge_fields()
+
+        # Get slide-specific merge fields
+        slide_fields = {}
+
+        if processor.presentation:
+            for slide_idx, slide in enumerate(processor.presentation.slides):
+                slide_number = slide_idx + 1
+                fields = processor._extract_slide_merge_fields(slide)
+                slide_fields[f"slide_{slide_number}"] = sorted(fields)
+
+        # Build results
+        results = {
+            "template_path": template,
+            "total_slides": (
+                len(processor.presentation.slides) if processor.presentation else 0
+            ),
+            "all_merge_fields": sorted(all_fields),
+            "slide_fields": slide_fields,
+            "summary": {
+                "total_unique_fields": len(all_fields),
+                "slides_with_fields": len([s for s in slide_fields.values() if s]),
+                "slides_without_fields": len(
+                    [s for s in slide_fields.values() if not s]
+                ),
+            },
+        }
+
+        # Format output
+        if pretty:
+            json_output = json.dumps(results, indent=2, ensure_ascii=False)
+        else:
+            json_output = json.dumps(results, ensure_ascii=False)
+
+        # Write output
+        if output:
+            from pathlib import Path
+
+            output_path = Path(output)
+            output_path.write_text(json_output, encoding="utf-8")
+            click.echo(f"Results written to: {output_path}")
+        else:
+            click.echo("\nDiagnostic Results:")
+            click.echo(json_output)
+
+        # Summary
+        total_slides = results.get("total_slides", 0)
+        total_fields = len(results.get("all_merge_fields", []))
+        click.echo(
+            f"\nSummary: {total_slides} slides, {total_fields} unique merge fields detected"
+        )
+
+        # Show fields per slide
+        for slide_key, fields in results.get("slide_fields", {}).items():
+            click.echo(f"  {slide_key}: {len(fields)} fields")
+
+        return 0
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        return 1
+
+
 @cli.command()
 @click.option("--host", default="0.0.0.0", help="Host to bind to")
 @click.option("--port", default=5000, help="Port to bind to")
 @click.option("--debug", is_flag=True, help="Enable debug mode")
-@click.option("--debug-range-images", is_flag=True, help="Enable enhanced range image debugging")
+@click.option(
+    "--debug-range-images", is_flag=True, help="Enable enhanced range image debugging"
+)
 def serve(host: str, port: int, debug: bool, debug_range_images: bool) -> None:
     """Start the Flask development server."""
     setup_logging()
-    
+
     # Setup range image debug mode if requested
     if debug_range_images:
         setup_range_image_debug_mode(enabled=True, level=logging.DEBUG)
@@ -1662,7 +1883,7 @@ def serve(host: str, port: int, debug: bool, debug_range_images: bool) -> None:
         logging.getLogger("PIL").setLevel(logging.WARNING)
         logging.getLogger("matplotlib").setLevel(logging.WARNING)
         logger.info("🖼️ Range Image Debug Mode: ENABLED")
-    
+
     logger.info(f"Starting Excel to PowerPoint Merger server on {host}:{port}")
     logger.info("Enhanced features: Image position extraction, position-based matching")
 

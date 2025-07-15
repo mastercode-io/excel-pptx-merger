@@ -137,7 +137,7 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                                                             },
                                                             "required": [
                                                                 "name",
-                                                                "type"
+                                                                "type",
                                                             ],
                                                         }
                                                     },
@@ -150,7 +150,7 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                                         {
                                             "required": [
                                                 "name",
-                                                "type", 
+                                                "type",
                                                 "header_search",
                                                 "data_extraction",
                                             ]
@@ -159,10 +159,10 @@ def validate_config_structure(config: Dict[str, Any]) -> None:
                                             "required": [
                                                 "name",
                                                 "type",
-                                                "header_search", 
+                                                "header_search",
                                                 "data_update",
                                             ]
-                                        }
+                                        },
                                     ],
                                 },
                             }
@@ -235,7 +235,11 @@ def validate_merge_fields(template_text: str) -> List[str]:
         if field:
             # Validate field name format
             if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*$", field):
-                raise ValidationError(f"Invalid merge field format: {{{{{field}}}}}")
+                # Log warning for invalid field but continue processing
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Skipping invalid merge field format: {{{{{field}}}}}")
+                continue
             validated_fields.append(field)
 
     return validated_fields

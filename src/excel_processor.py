@@ -25,12 +25,12 @@ from .utils.validation import (
 from .excel_range_exporter import ExcelRangeExporter, create_range_configs_from_dict
 from .config_schema_validator import validate_config_file
 from .utils.range_image_logger import (
-    range_image_logger, 
+    range_image_logger,
     setup_range_image_debug_mode,
     log_range_config,
     log_graph_api_status,
     log_range_export_progress,
-    log_range_validation_result
+    log_range_validation_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,16 +57,22 @@ class ExcelProcessor:
         # Initialize range exporter if credentials provided
         if graph_credentials:
             client_id = graph_credentials.get("client_id", "")
-            log_graph_api_status(client_id, "connecting", "Initializing ExcelRangeExporter")
-            
+            log_graph_api_status(
+                client_id, "connecting", "Initializing ExcelRangeExporter"
+            )
+
             self._range_exporter = ExcelRangeExporter(
                 client_id=client_id,
                 client_secret=graph_credentials.get("client_secret", ""),
                 tenant_id=graph_credentials.get("tenant_id", ""),
             )
-            log_graph_api_status(client_id, "connected", "ExcelRangeExporter initialized successfully")
+            log_graph_api_status(
+                client_id, "connected", "ExcelRangeExporter initialized successfully"
+            )
         else:
-            range_image_logger.warning("⚠️ No Graph API credentials provided - range image extraction disabled")
+            range_image_logger.warning(
+                "⚠️ No Graph API credentials provided - range image extraction disabled"
+            )
 
         if self._is_memory_file:
             self._load_from_memory()
@@ -224,27 +230,43 @@ class ExcelProcessor:
 
             # Extract range images if configured and enabled
             range_images = {}
-            logger.info("🔍 [RANGE_IMAGES] Checking range image extraction conditions...")
+            logger.info(
+                "🔍 [RANGE_IMAGES] Checking range image extraction conditions..."
+            )
             logger.info(f"🔍 [RANGE_IMAGES] full_config present: {bool(full_config)}")
-            logger.info(f"🔍 [RANGE_IMAGES] range_images in config: {'range_images' in full_config if full_config else False}")
-            logger.info(f"🔍 [RANGE_IMAGES] global_settings.range_images.enabled: {global_settings.get('range_images', {}).get('enabled', True)}")
-            logger.info(f"🔍 [RANGE_IMAGES] _range_exporter initialized: {self._range_exporter is not None}")
-            
+            logger.info(
+                f"🔍 [RANGE_IMAGES] range_images in config: {'range_images' in full_config if full_config else False}"
+            )
+            logger.info(
+                f"🔍 [RANGE_IMAGES] global_settings.range_images.enabled: {global_settings.get('range_images', {}).get('enabled', True)}"
+            )
+            logger.info(
+                f"🔍 [RANGE_IMAGES] _range_exporter initialized: {self._range_exporter is not None}"
+            )
+
             if (
                 full_config
                 and "range_images" in full_config
                 and global_settings.get("range_images", {}).get("enabled", True)
             ):
-                logger.info(f"✅ [RANGE_IMAGES] Starting range image extraction with {len(full_config['range_images'])} configurations")
+                logger.info(
+                    f"✅ [RANGE_IMAGES] Starting range image extraction with {len(full_config['range_images'])} configurations"
+                )
                 try:
                     range_images = self._extract_range_images(
                         full_config["range_images"]
                     )
-                    logger.info(f"✅ [RANGE_IMAGES] Successfully extracted {len(range_images)} range images")
+                    logger.info(
+                        f"✅ [RANGE_IMAGES] Successfully extracted {len(range_images)} range images"
+                    )
                 except Exception as e:
-                    logger.error(f"❌ [RANGE_IMAGES] Failed to extract range images: {e}")
+                    logger.error(
+                        f"❌ [RANGE_IMAGES] Failed to extract range images: {e}"
+                    )
             else:
-                logger.warning("⚠️ [RANGE_IMAGES] Range image extraction skipped - conditions not met")
+                logger.warning(
+                    "⚠️ [RANGE_IMAGES] Range image extraction skipped - conditions not met"
+                )
 
             for sheet_name, config in sheet_config.items():
                 logger.debug(f"Processing sheet: {sheet_name}")
@@ -1481,7 +1503,7 @@ class ExcelProcessor:
         for field, value in data.items():
             if field == "_field_types":
                 continue
-                
+
             # Look for image fields (either by field type or by field name)
             is_image_field = False
 
@@ -2022,10 +2044,14 @@ class ExcelProcessor:
         Returns:
             Dictionary mapping field_name to image file path
         """
-        range_image_logger.info(f"🚀 EXTRACTION STARTED with {len(range_configs_data) if range_configs_data else 0} configurations")
-        
+        range_image_logger.info(
+            f"🚀 EXTRACTION STARTED with {len(range_configs_data) if range_configs_data else 0} configurations"
+        )
+
         if not self._range_exporter:
-            range_image_logger.error("❌ Range exporter not initialized - Graph API credentials required")
+            range_image_logger.error(
+                "❌ Range exporter not initialized - Graph API credentials required"
+            )
             return {}
 
         if not range_configs_data:
@@ -2036,40 +2062,48 @@ class ExcelProcessor:
             # Log each range configuration with detailed formatting
             for i, config_data in enumerate(range_configs_data):
                 log_range_config(config_data, i)
-            
+
             # Validate and create range configurations
             range_configs = create_range_configs_from_dict(range_configs_data)
-            range_image_logger.info(f"✅ CONFIGURATION VALIDATION PASSED - Processing {len(range_configs)} range configurations")
+            range_image_logger.info(
+                f"✅ CONFIGURATION VALIDATION PASSED - Processing {len(range_configs)} range configurations"
+            )
 
             # Get the Excel file path for upload
             excel_file_path = self._get_excel_file_path()
             range_image_logger.info(f"📁 EXCEL FILE PATH: {excel_file_path}")
             if not excel_file_path:
-                range_image_logger.error("❌ Cannot determine Excel file path for range image export")
+                range_image_logger.error(
+                    "❌ Cannot determine Excel file path for range image export"
+                )
                 return {}
 
             # Log available sheet names for debugging
             available_sheets = list(self.workbook.sheetnames) if self.workbook else []
             range_image_logger.info(f"📊 AVAILABLE SHEETS: {available_sheets}")
-            
+
             # Log requested sheet names from configs
             requested_sheets = [config.sheet_name for config in range_configs]
             range_image_logger.info(f"🎯 REQUESTED SHEETS: {requested_sheets}")
 
             # Export ranges as images
-            range_image_logger.info(f"🚀 STARTING EXPORT PROCESS with {len(range_configs)} configurations")
+            range_image_logger.info(
+                f"🚀 STARTING EXPORT PROCESS with {len(range_configs)} configurations"
+            )
             results = self._range_exporter.export_ranges(excel_file_path, range_configs)
 
             # Process results and return mapping
             range_images = {}
             successful_exports = 0
             total_exports = len(results)
-            
+
             for i, result in enumerate(results, 1):
                 if result.success:
                     range_images[result.field_name] = result.image_path
                     successful_exports += 1
-                    log_range_export_progress(i, total_exports, result.field_name, "success")
+                    log_range_export_progress(
+                        i, total_exports, result.field_name, "success"
+                    )
                     range_image_logger.info(
                         f"✅ EXPORT SUCCESS: {result.field_name}\n"
                         f"   📁 Path: {result.image_path}\n"
@@ -2077,7 +2111,9 @@ class ExcelProcessor:
                         f"   📊 Range Size: {result.range_dimensions[0]} rows x {result.range_dimensions[1]} cols"
                     )
                 else:
-                    log_range_export_progress(i, total_exports, result.field_name, "failed")
+                    log_range_export_progress(
+                        i, total_exports, result.field_name, "failed"
+                    )
                     range_image_logger.error(
                         f"❌ EXPORT FAILED: {result.field_name}\n"
                         f"   💥 Error: {result.error_message}"
@@ -2091,7 +2127,9 @@ class ExcelProcessor:
             return range_images
 
         except Exception as e:
-            range_image_logger.error(f"💥 CRITICAL ERROR during range image extraction: {e}")
+            range_image_logger.error(
+                f"💥 CRITICAL ERROR during range image extraction: {e}"
+            )
             return {}
 
     def _get_excel_file_path(self) -> Optional[str]:

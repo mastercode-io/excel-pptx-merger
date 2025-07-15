@@ -147,20 +147,24 @@ class PowerPointProcessor:
 
             # Validate and clean up before saving
             self._validate_presentation_integrity()
-            
+
             # Final comprehensive cleanup to remove error attributes
             final_cleanup_count = self._final_cleanup_presentation()
             if final_cleanup_count > 0:
-                logger.info(f"Final cleanup removed {final_cleanup_count} error attributes")
+                logger.info(
+                    f"Final cleanup removed {final_cleanup_count} error attributes"
+                )
 
             # Save the merged presentation
             self.presentation.save(output_path)
             logger.info(f"Merged presentation saved to: {output_path}")
-            
+
             # Post-process the saved file to remove any remaining error attributes
             post_cleanup_count = self._post_process_xml_cleanup(output_path)
             if post_cleanup_count > 0:
-                logger.info(f"Post-processing removed {post_cleanup_count} error attributes from saved file")
+                logger.info(
+                    f"Post-processing removed {post_cleanup_count} error attributes from saved file"
+                )
 
             return output_path
 
@@ -312,7 +316,7 @@ class PowerPointProcessor:
         # Check if it's a range image
         if "_range_images" in data and field_name in data["_range_images"]:
             return True
-            
+
         field_type = self._get_field_type(field_name, data)
         return field_type == "image"
 
@@ -369,10 +373,14 @@ class PowerPointProcessor:
             if "_range_images" in data and field_name in data["_range_images"]:
                 range_image_path = data["_range_images"][field_name]
                 if os.path.exists(str(range_image_path)):
-                    logger.debug(f"Found range image for field '{field_name}': {range_image_path}")
+                    logger.debug(
+                        f"Found range image for field '{field_name}': {range_image_path}"
+                    )
                     return str(range_image_path)
                 else:
-                    logger.warning(f"Range image file does not exist: {range_image_path}")
+                    logger.warning(
+                        f"Range image file does not exist: {range_image_path}"
+                    )
 
             # Check if this is an image field based on metadata
             is_image = self._is_image_field(field_name, data)
@@ -679,6 +687,12 @@ class PowerPointProcessor:
     def _process_paragraph(self, paragraph, data: Dict[str, Any]) -> None:
         """Process a single paragraph for merge field replacement while preserving formatting."""
         try:
+            # Log the paragraph text being processed
+            paragraph_text = (
+                paragraph.text if hasattr(paragraph, "text") else str(paragraph)
+            )
+            logger.debug(f"📝 Processing paragraph: '{paragraph_text}'")
+
             # Try the new formatting-preserving approach first
             if self._process_paragraph_preserve_formatting(paragraph, data):
                 return
@@ -1098,7 +1112,11 @@ class PowerPointProcessor:
 
                                 # Ensure paragraph has at least one run
                                 # Skip field paragraphs to preserve clean structure
-                                if len(paragraph.runs) == 0 and not self._paragraph_contains_only_fields(paragraph):
+                                if len(
+                                    paragraph.runs
+                                ) == 0 and not self._paragraph_contains_only_fields(
+                                    paragraph
+                                ):
                                     # Add a minimal run to prevent issues
                                     paragraph.add_run()
                                     issues_found += 1
@@ -1133,12 +1151,16 @@ class PowerPointProcessor:
         """Remove error attributes from runs that cause PowerPoint repair issues."""
         try:
             removed_count = 0
-            logger.debug(f"Checking paragraph with {len(paragraph.runs)} runs for error attributes")
+            logger.debug(
+                f"Checking paragraph with {len(paragraph.runs)} runs for error attributes"
+            )
 
             for run_idx, run in enumerate(paragraph.runs):
                 if hasattr(run, "_element") and run._element is not None:
-                    logger.debug(f"Processing run {run_idx}: '{run.text}' (length: {len(run.text) if run.text else 0})")
-                    
+                    logger.debug(
+                        f"Processing run {run_idx}: '{run.text}' (length: {len(run.text) if run.text else 0})"
+                    )
+
                     # Find all run properties elements using multiple approaches
                     rpr_elements = run._element.xpath(
                         ".//a:rPr",
@@ -1146,7 +1168,7 @@ class PowerPointProcessor:
                             "a": "http://schemas.openxmlformats.org/drawingml/2006/main"
                         },
                     )
-                    
+
                     # Also try direct child approach
                     direct_rpr_elements = run._element.xpath(
                         "./a:rPr",
@@ -1154,21 +1176,25 @@ class PowerPointProcessor:
                             "a": "http://schemas.openxmlformats.org/drawingml/2006/main"
                         },
                     )
-                    
+
                     # Combine both approaches
                     all_rpr_elements = list(set(rpr_elements + direct_rpr_elements))
-                    
-                    logger.debug(f"Found {len(all_rpr_elements)} rPr elements in run {run_idx}")
+
+                    logger.debug(
+                        f"Found {len(all_rpr_elements)} rPr elements in run {run_idx}"
+                    )
 
                     for rpr_idx, rpr in enumerate(all_rpr_elements):
                         # Log all attributes for debugging
                         attrs = dict(rpr.attrib)
                         logger.debug(f"rPr element {rpr_idx} attributes: {attrs}")
-                        
+
                         # Remove err attributes that cause repair dialogs
                         if rpr.get("err") is not None:
                             err_value = rpr.get("err")
-                            logger.debug(f"Found err='{err_value}' attribute in run {run_idx}, removing")
+                            logger.debug(
+                                f"Found err='{err_value}' attribute in run {run_idx}, removing"
+                            )
                             rpr.attrib.pop("err", None)
                             removed_count += 1
 
@@ -1191,31 +1217,43 @@ class PowerPointProcessor:
         """Final comprehensive cleanup of the entire presentation to remove error attributes."""
         try:
             total_removed = 0
-            logger.info("Performing final cleanup of presentation to remove error attributes")
-            
+            logger.info(
+                "Performing final cleanup of presentation to remove error attributes"
+            )
+
             if not self.presentation:
                 return 0
-                
+
             for slide_idx, slide in enumerate(self.presentation.slides):
                 logger.debug(f"Final cleanup of slide {slide_idx + 1}")
-                
+
                 for shape_idx, shape in enumerate(slide.shapes):
                     if hasattr(shape, "text_frame") and shape.text_frame:
-                        for para_idx, paragraph in enumerate(shape.text_frame.paragraphs):
-                            removed_count = self._remove_error_attributes_from_paragraph(paragraph)
+                        for para_idx, paragraph in enumerate(
+                            shape.text_frame.paragraphs
+                        ):
+                            removed_count = (
+                                self._remove_error_attributes_from_paragraph(paragraph)
+                            )
                             total_removed += removed_count
-                            
+
                     # Also check table cells
                     if shape.shape_type == MSO_SHAPE_TYPE.TABLE:
                         for row in shape.table.rows:
                             for cell in row.cells:
                                 for paragraph in cell.text_frame.paragraphs:
-                                    removed_count = self._remove_error_attributes_from_paragraph(paragraph)
+                                    removed_count = (
+                                        self._remove_error_attributes_from_paragraph(
+                                            paragraph
+                                        )
+                                    )
                                     total_removed += removed_count
-            
-            logger.info(f"Final cleanup removed {total_removed} error attributes from presentation")
+
+            logger.info(
+                f"Final cleanup removed {total_removed} error attributes from presentation"
+            )
             return total_removed
-            
+
         except Exception as e:
             logger.warning(f"Failed in final cleanup: {e}")
             return 0
@@ -1226,144 +1264,174 @@ class PowerPointProcessor:
         import tempfile
         import shutil
         import xml.etree.ElementTree as ET
-        
+
         try:
-            logger.info("Performing post-processing XML cleanup to remove error attributes")
+            logger.info(
+                "Performing post-processing XML cleanup to remove error attributes"
+            )
             total_removed = 0
-            
+
             # Create a temporary directory
             with tempfile.TemporaryDirectory() as temp_dir:
                 # Extract the PPTX file
                 extract_dir = os.path.join(temp_dir, "pptx_content")
-                with zipfile.ZipFile(output_path, 'r') as zip_ref:
+                with zipfile.ZipFile(output_path, "r") as zip_ref:
                     zip_ref.extractall(extract_dir)
-                
+
                 # Find all slide XML files
                 slides_dir = os.path.join(extract_dir, "ppt", "slides")
                 if os.path.exists(slides_dir):
                     for filename in os.listdir(slides_dir):
-                        if filename.endswith('.xml'):
+                        if filename.endswith(".xml"):
                             slide_file = os.path.join(slides_dir, filename)
                             removed_count = self._clean_xml_file(slide_file)
                             total_removed += removed_count
-                
+
                 # Also clean slide layouts
                 layouts_dir = os.path.join(extract_dir, "ppt", "slideLayouts")
                 if os.path.exists(layouts_dir):
                     for filename in os.listdir(layouts_dir):
-                        if filename.endswith('.xml'):
+                        if filename.endswith(".xml"):
                             layout_file = os.path.join(layouts_dir, filename)
                             removed_count = self._clean_xml_file(layout_file)
                             total_removed += removed_count
-                
+
                 # Also clean slide masters
                 masters_dir = os.path.join(extract_dir, "ppt", "slideMasters")
                 if os.path.exists(masters_dir):
                     for filename in os.listdir(masters_dir):
-                        if filename.endswith('.xml'):
+                        if filename.endswith(".xml"):
                             master_file = os.path.join(masters_dir, filename)
                             removed_count = self._clean_xml_file(master_file)
                             total_removed += removed_count
-                
+
                 # Also clean custom XML files that may have malformed namespaces
                 custom_xml_dir = os.path.join(extract_dir, "customXml")
                 if os.path.exists(custom_xml_dir):
                     for filename in os.listdir(custom_xml_dir):
-                        if filename.endswith('.xml'):
+                        if filename.endswith(".xml"):
                             custom_file = os.path.join(custom_xml_dir, filename)
                             removed_count = self._clean_xml_file(custom_file)
                             total_removed += removed_count
-                
+
                 # Re-create the PPTX file
-                with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zip_ref:
+                with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zip_ref:
                     for root, dirs, files in os.walk(extract_dir):
                         for file in files:
                             file_path = os.path.join(root, file)
                             arc_name = os.path.relpath(file_path, extract_dir)
                             zip_ref.write(file_path, arc_name)
-            
-            logger.info(f"Post-processing removed {total_removed} error attributes from XML")
+
+            logger.info(
+                f"Post-processing removed {total_removed} error attributes from XML"
+            )
             return total_removed
-            
+
         except Exception as e:
             logger.warning(f"Failed in post-processing XML cleanup: {e}")
             return 0
-    
+
     def _clean_xml_file(self, xml_file_path: str) -> int:
         """Clean error attributes and other corruption patterns from a specific XML file."""
         try:
             removed_count = 0
-            
+
             # Read the XML file as text and use regex to remove problematic content
-            with open(xml_file_path, 'r', encoding='utf-8') as f:
+            with open(xml_file_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            
+
             original_content = content
-            
+
             import re
-            
+
             # Remove err="any_value" attributes
             err_matches = re.findall(r'\s+err="[^"]*"', content)
             if err_matches:
-                logger.debug(f"Removing {len(err_matches)} err attributes from {os.path.basename(xml_file_path)}")
-                content = re.sub(r'\s+err="[^"]*"', '', content)
+                logger.debug(
+                    f"Removing {len(err_matches)} err attributes from {os.path.basename(xml_file_path)}"
+                )
+                content = re.sub(r'\s+err="[^"]*"', "", content)
                 removed_count += len(err_matches)
-            
+
             # Fix malformed namespace URIs in custom XML (common corruption pattern)
-            if 'customXml' in xml_file_path:
+            if "customXml" in xml_file_path:
                 # Fix non-absolute namespace URIs that cause XML validation warnings
                 namespace_fixes = [
-                    (r'xmlns="34dc52e9-6ce5-490e-bfb5-77ee5cb5f472"', 'xmlns="urn:34dc52e9-6ce5-490e-bfb5-77ee5cb5f472"'),
-                    (r'xmlns="b6b70467-c097-40cb-848d-196196b595db"', 'xmlns="urn:b6b70467-c097-40cb-848d-196196b595db"'),
+                    (
+                        r'xmlns="34dc52e9-6ce5-490e-bfb5-77ee5cb5f472"',
+                        'xmlns="urn:34dc52e9-6ce5-490e-bfb5-77ee5cb5f472"',
+                    ),
+                    (
+                        r'xmlns="b6b70467-c097-40cb-848d-196196b595db"',
+                        'xmlns="urn:b6b70467-c097-40cb-848d-196196b595db"',
+                    ),
                 ]
-                
+
                 for pattern, replacement in namespace_fixes:
                     if re.search(pattern, content):
-                        logger.debug(f"Fixing malformed namespace URI in {os.path.basename(xml_file_path)}")
+                        logger.debug(
+                            f"Fixing malformed namespace URI in {os.path.basename(xml_file_path)}"
+                        )
                         content = re.sub(pattern, replacement, content)
                         removed_count += 1
-            
+
             # CRITICAL FIX: Remove empty runs that appear after field elements (main corruption cause)
-            field_adjacent_pattern = r'</a:fld><a:r><a:t></a:t></a:r>'
+            field_adjacent_pattern = r"</a:fld><a:r><a:t></a:t></a:r>"
             field_adjacent_matches = re.findall(field_adjacent_pattern, content)
             if field_adjacent_matches:
-                logger.debug(f"Removing {len(field_adjacent_matches)} field-adjacent empty runs from {os.path.basename(xml_file_path)}")
-                content = re.sub(field_adjacent_pattern, '</a:fld>', content)
+                logger.debug(
+                    f"Removing {len(field_adjacent_matches)} field-adjacent empty runs from {os.path.basename(xml_file_path)}"
+                )
+                content = re.sub(field_adjacent_pattern, "</a:fld>", content)
                 removed_count += len(field_adjacent_matches)
-            
+
             # ENHANCED: Remove any empty runs with just whitespace
-            empty_whitespace_pattern = r'<a:r[^>]*><a:t>\s*</a:t></a:r>'
+            empty_whitespace_pattern = r"<a:r[^>]*><a:t>\s*</a:t></a:r>"
             whitespace_matches = re.findall(empty_whitespace_pattern, content)
             if whitespace_matches:
-                logger.debug(f"Removing {len(whitespace_matches)} whitespace-only runs from {os.path.basename(xml_file_path)}")
-                content = re.sub(empty_whitespace_pattern, '', content)
+                logger.debug(
+                    f"Removing {len(whitespace_matches)} whitespace-only runs from {os.path.basename(xml_file_path)}"
+                )
+                content = re.sub(empty_whitespace_pattern, "", content)
                 removed_count += len(whitespace_matches)
-            
+
             # ENHANCED: Remove multiple consecutive empty runs
-            consecutive_empty_pattern = r'(<a:r[^>]*><a:t></a:t></a:r>\s*){2,}'
+            consecutive_empty_pattern = r"(<a:r[^>]*><a:t></a:t></a:r>\s*){2,}"
             consecutive_matches = re.findall(consecutive_empty_pattern, content)
             if consecutive_matches:
-                logger.debug(f"Removing {len(consecutive_matches)} consecutive empty run groups from {os.path.basename(xml_file_path)}")
-                content = re.sub(consecutive_empty_pattern, '', content)
+                logger.debug(
+                    f"Removing {len(consecutive_matches)} consecutive empty run groups from {os.path.basename(xml_file_path)}"
+                )
+                content = re.sub(consecutive_empty_pattern, "", content)
                 removed_count += len(consecutive_matches)
 
             # Remove problematic empty runs with dirty="0" in layouts and masters
-            if 'slideLayout' in xml_file_path or 'slideMaster' in xml_file_path:
+            if "slideLayout" in xml_file_path or "slideMaster" in xml_file_path:
                 # Remove empty runs that have dirty="0" and no meaningful content
-                empty_dirty_runs = re.findall(r'<a:r><a:rPr[^>]*dirty="0"[^>]*\/><a:t><\/a:t><\/a:r>', content)
+                empty_dirty_runs = re.findall(
+                    r'<a:r><a:rPr[^>]*dirty="0"[^>]*\/><a:t><\/a:t><\/a:r>', content
+                )
                 if empty_dirty_runs:
-                    logger.debug(f"Removing {len(empty_dirty_runs)} empty dirty runs from {os.path.basename(xml_file_path)}")
-                    content = re.sub(r'<a:r><a:rPr[^>]*dirty="0"[^>]*\/><a:t><\/a:t><\/a:r>', '', content)
+                    logger.debug(
+                        f"Removing {len(empty_dirty_runs)} empty dirty runs from {os.path.basename(xml_file_path)}"
+                    )
+                    content = re.sub(
+                        r'<a:r><a:rPr[^>]*dirty="0"[^>]*\/><a:t><\/a:t><\/a:r>',
+                        "",
+                        content,
+                    )
                     removed_count += len(empty_dirty_runs)
-            
+
             # Write back the cleaned content only if changes were made
             if content != original_content:
-                with open(xml_file_path, 'w', encoding='utf-8') as f:
+                with open(xml_file_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                logger.debug(f"Applied {removed_count} fixes to {os.path.basename(xml_file_path)}")
-            
+                logger.debug(
+                    f"Applied {removed_count} fixes to {os.path.basename(xml_file_path)}"
+                )
+
             return removed_count
-            
+
         except Exception as e:
             logger.warning(f"Failed to clean XML file {xml_file_path}: {e}")
             return 0
@@ -1373,18 +1441,18 @@ class PowerPointProcessor:
         try:
             para_xml = paragraph._element
             children = list(para_xml)
-            
+
             has_field = False
             for child in children:
-                tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                if tag == 'fld':
+                tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if tag == "fld":
                     has_field = True
-                elif tag not in ['endParaRPr']:
+                elif tag not in ["endParaRPr"]:
                     # Found non-field, non-endParaRPr element
                     return False
-            
+
             return has_field  # Only return True if we found fields and no other content
-            
+
         except Exception as e:
             logger.debug(f"Error checking field paragraph: {e}")
             return False
@@ -1393,9 +1461,12 @@ class PowerPointProcessor:
         """Check if paragraph contains any field elements."""
         try:
             para_xml = paragraph._element
-            fld_elements = para_xml.xpath(".//a:fld", namespaces={
-                "a": "http://schemas.openxmlformats.org/drawingml/2006/main"
-            })
+            fld_elements = para_xml.xpath(
+                ".//a:fld",
+                namespaces={
+                    "a": "http://schemas.openxmlformats.org/drawingml/2006/main"
+                },
+            )
             return len(fld_elements) > 0
         except Exception:
             return False
@@ -1405,27 +1476,41 @@ class PowerPointProcessor:
         try:
             if not self._paragraph_contains_fields(paragraph):
                 return
-                
+
             para_xml = paragraph._element
-            
+
             # Remove empty runs that appear between fields and endParaRPr
-            empty_runs = para_xml.xpath(".//a:r[a:t[not(text()) or normalize-space(text())='']]", 
-                                      namespaces={"a": "http://schemas.openxmlformats.org/drawingml/2006/main"})
-            
+            empty_runs = para_xml.xpath(
+                ".//a:r[a:t[not(text()) or normalize-space(text())='']]",
+                namespaces={
+                    "a": "http://schemas.openxmlformats.org/drawingml/2006/main"
+                },
+            )
+
             removed_count = 0
             for run in empty_runs:
                 # Only remove if it's truly empty and appears after a field
                 prev_sibling = run.getprevious()
                 if prev_sibling is not None:
-                    prev_tag = prev_sibling.tag.split('}')[-1] if '}' in prev_sibling.tag else prev_sibling.tag
-                    if prev_tag == 'fld':  # Empty run right after field - this is the problem!
+                    prev_tag = (
+                        prev_sibling.tag.split("}")[-1]
+                        if "}" in prev_sibling.tag
+                        else prev_sibling.tag
+                    )
+                    if (
+                        prev_tag == "fld"
+                    ):  # Empty run right after field - this is the problem!
                         para_xml.remove(run)
                         removed_count += 1
-                        logger.debug("Removed problematic empty run after field element")
-            
+                        logger.debug(
+                            "Removed problematic empty run after field element"
+                        )
+
             if removed_count > 0:
-                logger.debug(f"Cleaned {removed_count} problematic runs from field paragraph")
-                
+                logger.debug(
+                    f"Cleaned {removed_count} problematic runs from field paragraph"
+                )
+
         except Exception as e:
             logger.warning(f"Failed to clean field structure: {e}")
 
@@ -1434,11 +1519,16 @@ class PowerPointProcessor:
         try:
             para_xml = paragraph._element
             runs_to_remove = []
-            
+
             # Find all text runs
-            for run in para_xml.findall('.//a:r', {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}):
+            for run in para_xml.findall(
+                ".//a:r", {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+            ):
                 # Check if run has empty or whitespace-only text
-                text_elem = run.find('.//a:t', {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'})
+                text_elem = run.find(
+                    ".//a:t",
+                    {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"},
+                )
                 if text_elem is not None:
                     text_content = text_elem.text or ""
                     # Remove if completely empty or just whitespace
@@ -1447,7 +1537,7 @@ class PowerPointProcessor:
                 else:
                     # Run without text element - definitely remove
                     runs_to_remove.append(run)
-            
+
             # Remove identified empty runs
             for run in runs_to_remove:
                 try:
@@ -1455,10 +1545,12 @@ class PowerPointProcessor:
                     logger.debug("Removed empty/whitespace run in aggressive cleanup")
                 except Exception as e:
                     logger.debug(f"Could not remove run in aggressive cleanup: {e}")
-                    
+
             if runs_to_remove:
-                logger.debug(f"Aggressive cleanup removed {len(runs_to_remove)} empty runs")
-                
+                logger.debug(
+                    f"Aggressive cleanup removed {len(runs_to_remove)} empty runs"
+                )
+
         except Exception as e:
             logger.warning(f"Failed in aggressive empty run cleanup: {e}")
 
@@ -1466,10 +1558,16 @@ class PowerPointProcessor:
         """Process table shape for merge field replacement."""
         try:
             table = shape.table
+            logger.debug(
+                f"📊 Processing table with {len(table.rows)} rows and {len(table.columns)} columns"
+            )
 
-            for row in table.rows:
-                for cell in row.cells:
+            for row_idx, row in enumerate(table.rows):
+                for col_idx, cell in enumerate(row.cells):
                     if cell.text:
+                        logger.debug(
+                            f"🔍 Processing cell [{row_idx},{col_idx}]: '{cell.text}'"
+                        )
                         # Process each paragraph in the cell
                         for paragraph in cell.text_frame.paragraphs:
                             self._process_paragraph(paragraph, data)
@@ -1484,15 +1582,17 @@ class PowerPointProcessor:
             field_parts = field_name.split(".")
             current_value = data
 
-            # Debug logging (commented out to reduce verbosity)
-            # logger.debug(f"Getting field value for: {field_name}")
-            # logger.debug(f"Data keys at root level: {list(data.keys())}")
+            # Debug logging for field resolution
+            logger.debug(f"🔍 Getting field value for: {field_name}")
+            logger.debug(f"📊 Data keys at root level: {list(data.keys())}")
 
             # First try direct path resolution
             for part in field_parts:
                 if isinstance(current_value, dict):
                     current_value = current_value.get(part)
-                    # logger.debug(f"After part '{part}': {type(current_value).__name__}")  # Too verbose
+                    logger.debug(
+                        f"🔸 After part '{part}': {type(current_value).__name__} = {current_value}"
+                    )
                 elif isinstance(current_value, list):
                     try:
                         index = int(part)
@@ -1501,20 +1601,26 @@ class PowerPointProcessor:
                             if 0 <= index < len(current_value)
                             else None
                         )
-                        # logger.debug(f"After list index {index}: {type(current_value).__name__}")  # Too verbose
+                        logger.debug(
+                            f"🔹 After list index {index}: {type(current_value).__name__} = {current_value}"
+                        )
                     except (ValueError, IndexError):
                         current_value = None
-                        # logger.debug(f"Invalid list index: {part}")  # Too verbose
+                        logger.debug(f"❌ Invalid list index: {part}")
                 else:
                     current_value = None
-                    # logger.debug(f"Cannot navigate further from {type(current_value).__name__}")  # Too verbose
+                    logger.debug(
+                        f"🚫 Cannot navigate further from {type(current_value).__name__}"
+                    )
 
                 if current_value is None:
                     break
 
             # If direct path failed and we have sheet data, try looking in each sheet
             if current_value is None:
-                # logger.debug("Direct path resolution failed, trying sheet-nested lookup")  # Too verbose
+                logger.debug(
+                    "🔄 Direct path resolution failed, trying sheet-nested lookup"
+                )
                 # Try to find the field in sheet data (e.g., order_form.image_search.0.field)
                 for sheet_name, sheet_data in data.items():
                     # Skip metadata and debug fields
@@ -1647,7 +1753,7 @@ class PowerPointProcessor:
             ):
                 logger.debug(f"Returning image data for field: {field_name}")
             else:
-                logger.debug(f"Final value for '{field_name}': {current_value}")
+                logger.debug(f"✅ Final value for '{field_name}': {current_value}")
             return current_value
 
         except Exception as e:
