@@ -324,7 +324,7 @@ class ExcelProcessor:
         # Extract data based on type
         if subtable_type == "key_value_pairs":
             return self._extract_key_value_pairs(
-                worksheet, header_location, data_extraction
+                worksheet, header_location, data_extraction, images
             )
         elif subtable_type == "table":
             return self._extract_table_data(
@@ -403,6 +403,7 @@ class ExcelProcessor:
         worksheet: Worksheet,
         header_location: Tuple[int, int],
         config: Dict[str, Any],
+        images: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
         """Extract key-value pairs from Excel sheet."""
         header_row, header_col = header_location
@@ -452,7 +453,13 @@ class ExcelProcessor:
                             mapped_key = normalize_column_name(original_key)
                             field_type = "text"  # Default type
 
-                        data[mapped_key] = value
+                        # Handle image fields specially
+                        if field_type == "image":
+                            # For image fields, we need to find the image at this position
+                            # We'll set to None for now and let the image linking process handle it
+                            data[mapped_key] = None
+                        else:
+                            data[mapped_key] = value
 
                         # Store field type if not the default text type
                         if field_type != "text":
@@ -488,7 +495,13 @@ class ExcelProcessor:
                             mapped_key = normalize_column_name(original_key)
                             field_type = "text"  # Default type
 
-                        data[mapped_key] = value
+                        # Handle image fields specially
+                        if field_type == "image":
+                            # For image fields, we need to find the image at this position
+                            # We'll set to None for now and let the image linking process handle it
+                            data[mapped_key] = None
+                        else:
+                            data[mapped_key] = value
 
                         # Store field type if not the default text type
                         if field_type != "text":
@@ -497,6 +510,10 @@ class ExcelProcessor:
             # Add field type metadata if we have any non-text fields
             if field_types:
                 data["_field_types"] = field_types
+
+            # Link images to image fields if images are available
+            if images and data:
+                self._link_images_to_key_value_pairs(data, images)
 
         except Exception as e:
             raise ExcelProcessingError(f"Failed to extract key-value pairs: {e}")
@@ -1439,6 +1456,52 @@ class ExcelProcessor:
                 # If no explicit image field was found but we have an image, add it to an 'image' field
                 if "image" not in row_data:
                     row_data["image"] = row_to_image[sorted_rows[i]]
+
+    def _link_images_to_key_value_pairs(
+        self, data: Dict[str, Any], images: List[Dict[str, Any]]
+    ) -> None:
+        """Link images to key-value pairs based on position information."""
+        if not images or not data:
+            return
+
+        # Create a mapping of row numbers to images
+        row_to_image = {}
+        for img in images:
+            if "position" in img and "coordinates" in img["position"]:
+                row_num = img["position"]["coordinates"]["from"]["row"]
+                row_to_image[row_num] = {"base64": img["image_base64"]}
+                if "path" in img:
+                    row_to_image[row_num]["path"] = img["path"]
+
+        # Sort images by row number
+        sorted_rows = sorted(row_to_image.keys())
+
+        # Assign images to data fields where appropriate
+        image_index = 0
+        for field, value in data.items():
+            if field == "_field_types":
+                continue
+                
+            # Look for image fields (either by field type or by field name)
+            is_image_field = False
+
+            # Check field types metadata if available
+            if "_field_types" in data and field in data["_field_types"]:
+                is_image_field = data["_field_types"][field] == "image"
+
+            # Also check by common image field names
+            if not is_image_field and field.lower() in (
+                "image",
+                "logo",
+                "picture",
+                "photo",
+            ):
+                is_image_field = True
+
+            if is_image_field and value is None and image_index < len(sorted_rows):
+                # This is an image field with no value, assign the image data
+                data[field] = row_to_image[sorted_rows[image_index]]
+                image_index += 1
 
     def _get_sheet_metadata(
         self,
