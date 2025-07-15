@@ -21,6 +21,7 @@ from .excel_processor import ExcelProcessor
 from .pptx_processor import PowerPointProcessor
 from .excel_updater import ExcelUpdater
 from .temp_file_manager import TempFileManager
+from .graph_api_config import get_graph_api_credentials
 from .utils.exceptions import (
     ExcelPptxMergerError,
     ValidationError,
@@ -32,6 +33,7 @@ from .utils.exceptions import (
 )
 from .utils.validation import validate_api_request
 from .utils.file_utils import save_uploaded_file, get_file_info
+from .utils.range_image_logger import setup_range_image_debug_mode
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -223,15 +225,23 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         session_id = request.headers.get("X-Session-ID")
         if not session_id:
             session_id = str(uuid.uuid4())
-            logger.info(f"Generated new session ID: {session_id}")
+            logger.debug(f"Generated new session ID: {session_id}")
         else:
-            logger.info(f"Using provided session ID: {session_id}")
+            logger.debug(f"Using provided session ID: {session_id}")
 
         # Check if we should save files
         save_files = app_config.get("save_files", False)
-        logger.info(
+        logger.debug(
             f"File saving mode: {'enabled' if save_files else 'disabled (memory-only)'}"
         )
+
+        # Load Graph API credentials for range image extraction
+        graph_credentials = get_graph_api_credentials()
+        if graph_credentials:
+            logger.info("Graph API credentials loaded - range image extraction enabled")
+            logger.debug(f"Loaded credentials: client_id={graph_credentials.get('client_id', '')[:8]}...")
+        else:
+            logger.info("Graph API credentials not found - range image extraction disabled")
 
         # Get extraction configuration
         extraction_config = {}
@@ -246,14 +256,14 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
 
         # If no configuration provided, use auto-detection
         if not extraction_config:
-            logger.info("No configuration provided, using auto-detection")
-            excel_processor_for_detection = ExcelProcessor(excel_file)
+            logger.debug("No configuration provided, using auto-detection")
+            excel_processor_for_detection = ExcelProcessor(excel_file, graph_credentials)
 
             try:
                 extraction_config = (
                     excel_processor_for_detection.auto_detect_all_sheets()
                 )
-                logger.info("Using auto-detection for all sheets in merge operation")
+                logger.debug("Using auto-detection for all sheets in merge operation")
             except Exception as e:
                 logger.error(f"Auto-detection failed: {e}")
                 return create_error_response(
@@ -292,9 +302,9 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
 
         # Process Excel file
         if save_files:
-            excel_processor = ExcelProcessor(excel_path)
+            excel_processor = ExcelProcessor(excel_path, graph_credentials)
         else:
-            excel_processor = ExcelProcessor(excel_file)
+            excel_processor = ExcelProcessor(excel_file, graph_credentials)
 
         try:
             try:
@@ -302,6 +312,7 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 extracted_data = excel_processor.extract_data(
                     extraction_config.get("global_settings", {}),
                     extraction_config.get("sheet_configs", {}),
+                    extraction_config
                 )
                 logger.info(f"Successfully extracted data from Excel file")
             except Exception as e:
@@ -531,12 +542,16 @@ def preview_merge() -> Tuple[Dict[str, Any], int]:
             temp_dir, pptx_file.filename, pptx_file
         )
 
+        # Load Graph API credentials for range image extraction
+        graph_credentials = get_graph_api_credentials()
+
         # Process Excel file
-        excel_processor = ExcelProcessor(excel_path)
+        excel_processor = ExcelProcessor(excel_path, graph_credentials)
         try:
             extracted_data = excel_processor.extract_data(
                 extraction_config.get("global_settings", {}),
                 extraction_config.get("sheet_configs", {}),
+                extraction_config
             )
 
             # Extract images with position information
@@ -894,8 +909,11 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
             f"Extracting data from sheets {sheet_names} with auto_detect={auto_detect}, max_rows={max_rows}"
         )
 
+        # Load Graph API credentials for range image extraction
+        graph_credentials = get_graph_api_credentials()
+
         # Process Excel file (use existing memory/file handling logic)
-        excel_processor = ExcelProcessor(excel_file)
+        excel_processor = ExcelProcessor(excel_file, graph_credentials)
         try:
             # Get available sheet names for validation
             available_sheets = excel_processor.get_sheet_names()
@@ -1521,11 +1539,22 @@ def cli():
 @click.option(
     "--debug-images/--no-debug-images", default=False, help="Save debug images"
 )
+@click.option(
+    "--debug-range-images/--no-debug-range-images", default=False, help="Enable enhanced range image debugging"
+)
 def merge_cli(
-    excel_file, pptx_file, output_file=None, config_file=None, debug_images=False
+    excel_file, pptx_file, output_file=None, config_file=None, debug_images=False, debug_range_images=False
 ):
     """Merge Excel data into PowerPoint template."""
     try:
+        # Setup range image debug mode if requested
+        if debug_range_images:
+            setup_range_image_debug_mode(enabled=True, level=logging.DEBUG)
+            # Reduce verbosity of other loggers when focusing on range images
+            logging.getLogger("src.pptx_processor").setLevel(logging.WARNING)
+            logging.getLogger("PIL").setLevel(logging.WARNING)
+            logging.getLogger("matplotlib").setLevel(logging.WARNING)
+        
         # Load extraction configuration if provided
         extraction_config = {}
         if config_file:
@@ -1552,14 +1581,18 @@ def merge_cli(
         session_id = str(uuid.uuid4())
         temp_dir = temp_manager.get_session_directory(session_id)
 
+        # Load Graph API credentials for range image extraction
+        graph_credentials = get_graph_api_credentials()
+
         # Process Excel file
-        excel_processor = ExcelProcessor(excel_file)
+        excel_processor = ExcelProcessor(excel_file, graph_credentials)
         try:
             # Extract data from Excel
             try:
                 extracted_data = excel_processor.extract_data(
                     extraction_config.get("global_settings", {}),
                     extraction_config.get("sheet_configs", {}),
+                    extraction_config
                 )
 
                 # Extract images with enhanced position information
@@ -1616,9 +1649,20 @@ def merge_cli(
 @click.option("--host", default="0.0.0.0", help="Host to bind to")
 @click.option("--port", default=5000, help="Port to bind to")
 @click.option("--debug", is_flag=True, help="Enable debug mode")
-def serve(host: str, port: int, debug: bool) -> None:
+@click.option("--debug-range-images", is_flag=True, help="Enable enhanced range image debugging")
+def serve(host: str, port: int, debug: bool, debug_range_images: bool) -> None:
     """Start the Flask development server."""
     setup_logging()
+    
+    # Setup range image debug mode if requested
+    if debug_range_images:
+        setup_range_image_debug_mode(enabled=True, level=logging.DEBUG)
+        # Reduce verbosity of other loggers when focusing on range images
+        logging.getLogger("src.pptx_processor").setLevel(logging.WARNING)
+        logging.getLogger("PIL").setLevel(logging.WARNING)
+        logging.getLogger("matplotlib").setLevel(logging.WARNING)
+        logger.info("🖼️ Range Image Debug Mode: ENABLED")
+    
     logger.info(f"Starting Excel to PowerPoint Merger server on {host}:{port}")
     logger.info("Enhanced features: Image position extraction, position-based matching")
 

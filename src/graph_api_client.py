@@ -15,6 +15,7 @@ from .utils.graph_api_error_handler import (
     safe_graph_operation,
     validate_graph_response
 )
+from .utils.range_image_logger import range_image_logger, log_graph_api_status
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class GraphAPIClient:
             # Set expiry with 5 minute buffer
             self.token_expires_at = time.time() + token_data['expires_in'] - 300
             
-            logger.info("Successfully authenticated with Microsoft Graph API")
+            log_graph_api_status(self.client_id, "authenticated", "Successfully authenticated with Microsoft Graph API")
             return self.access_token
     
     def _get_headers(self) -> Dict[str, str]:
@@ -97,7 +98,7 @@ class GraphAPIClient:
             upload_result = response.json()
             item_id = upload_result['id']
             
-            logger.info(f"Successfully uploaded workbook to OneDrive: {unique_filename} (ID: {item_id})")
+            range_image_logger.info(f"📤 ONEDRIVE UPLOAD SUCCESS: {unique_filename} (ID: {item_id})")
             return item_id
             
         except requests.exceptions.RequestException as e:
@@ -132,7 +133,7 @@ class GraphAPIClient:
             if not content_type.startswith('image/'):
                 raise GraphAPIError(f"Expected image response, got: {content_type}")
                 
-            logger.info(f"Successfully rendered range {range_str} from sheet '{sheet_name}' as image")
+            range_image_logger.info(f"🎨 RANGE RENDER SUCCESS: {range_str} from sheet '{sheet_name}' ({len(response.content)} bytes)")
             return response.content
     
     def get_worksheet_names(self, item_id: str) -> list:

@@ -15,6 +15,7 @@ sys.path.insert(0, str(project_root / 'src'))
 
 from src.main import app, setup_logging
 from src.config_manager import ConfigManager
+from src.utils.range_image_logger import setup_range_image_debug_mode
 
 
 @click.command()
@@ -26,7 +27,8 @@ from src.config_manager import ConfigManager
 @click.option('--log-level', default='INFO', help='Log level (DEBUG, INFO, WARNING, ERROR)')
 @click.option('--storage', default=None, type=click.Choice(['LOCAL', 'GCS']),
               help='Storage backend to use (LOCAL or GCS). Overrides .env setting.')
-def run_server(host, port, debug, env, reload, log_level, storage):
+@click.option('--debug-range-images', is_flag=True, help='Enable enhanced range image debugging')
+def run_server(host, port, debug, env, reload, log_level, storage, debug_range_images):
     """Run the Excel to PowerPoint Merger Flask server locally."""
 
     # Set environment
@@ -41,6 +43,15 @@ def run_server(host, port, debug, env, reload, log_level, storage):
     # Setup logging
     setup_logging()
     logger = logging.getLogger(__name__)
+    
+    # Setup range image debug mode if requested
+    if debug_range_images:
+        setup_range_image_debug_mode(enabled=True, level=logging.DEBUG)
+        # Reduce verbosity of other loggers when focusing on range images
+        logging.getLogger("src.pptx_processor").setLevel(logging.WARNING)
+        logging.getLogger("PIL").setLevel(logging.WARNING)
+        logging.getLogger("matplotlib").setLevel(logging.WARNING)
+        logger.info("🖼️ Range Image Debug Mode: ENABLED")
 
     # Load environment-specific configuration
     config_manager = ConfigManager()
@@ -49,6 +60,7 @@ def run_server(host, port, debug, env, reload, log_level, storage):
     logger.info(f"Starting Excel to PowerPoint Merger server")
     logger.info(f"Environment: {env}")
     logger.info(f"Debug mode: {debug}")
+    logger.info(f"Range image debug: {debug_range_images}")
     logger.info(f"Host: {host}")
     logger.info(f"Port: {port}")
     logger.info(f"Log level: {log_level}")
