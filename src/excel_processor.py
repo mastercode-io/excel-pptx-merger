@@ -442,6 +442,7 @@ class ExcelProcessor:
 
         data = {}
         field_types = {}  # Store field type information
+        field_positions = {}  # Store cell position information for image fields
 
         try:
             if orientation == "horizontal":
@@ -478,8 +479,10 @@ class ExcelProcessor:
                         # Handle image fields specially
                         if field_type == "image":
                             # For image fields, we need to find the image at this position
-                            # We'll set to None for now and let the image linking process handle it
+                            # Store the exact cell position where this image field should be located
+                            # Also store the original text value as fallback
                             data[mapped_key] = None
+                            field_positions[mapped_key] = {"row": values_row, "col": col, "text_fallback": value}
                         else:
                             data[mapped_key] = value
 
@@ -520,8 +523,10 @@ class ExcelProcessor:
                         # Handle image fields specially
                         if field_type == "image":
                             # For image fields, we need to find the image at this position
-                            # We'll set to None for now and let the image linking process handle it
+                            # Store the exact cell position where this image field should be located
+                            # Also store the original text value as fallback
                             data[mapped_key] = None
+                            field_positions[mapped_key] = {"row": row, "col": values_col, "text_fallback": value}
                         else:
                             data[mapped_key] = value
 
@@ -532,6 +537,10 @@ class ExcelProcessor:
             # Add field type metadata if we have any non-text fields
             if field_types:
                 data["_field_types"] = field_types
+            
+            # Add field position metadata if we have any image fields
+            if field_positions:
+                data["_field_positions"] = field_positions
 
             # Link images to image fields if images are available
             if images and data:
@@ -1482,48 +1491,69 @@ class ExcelProcessor:
     def _link_images_to_key_value_pairs(
         self, data: Dict[str, Any], images: List[Dict[str, Any]]
     ) -> None:
-        """Link images to key-value pairs based on position information."""
+        """Link images to key-value pairs based on exact cell position information."""
         if not images or not data:
             return
 
-        # Create a mapping of row numbers to images
-        row_to_image = {}
-        for img in images:
-            if "position" in img and "coordinates" in img["position"]:
-                row_num = img["position"]["coordinates"]["from"]["row"]
-                row_to_image[row_num] = {"base64": img["image_base64"]}
-                if "path" in img:
-                    row_to_image[row_num]["path"] = img["path"]
+        # Get field position metadata if available
+        field_positions = data.get("_field_positions", {})
 
-        # Sort images by row number
-        sorted_rows = sorted(row_to_image.keys())
+        # Process each field that has position information
+        for field, position in field_positions.items():
+            if field in data and data[field] is None:
+                # Look for an image at this exact position
+                image_data = self._get_image_at_position(
+                    position["row"], position["col"], images
+                )
+                if image_data:
+                    data[field] = image_data
+                else:
+                    # No image found at the exact position, use text fallback if available
+                    # This handles cases where a field is marked as "image" type but contains text
+                    text_fallback = position.get("text_fallback")
+                    if text_fallback is not None:
+                        data[field] = text_fallback
+                        logger.debug(f"Using text fallback for image field '{field}': {text_fallback}")
+                    else:
+                        logger.debug(f"No image found at position for field '{field}' at row {position['row']}, col {position['col']}")
 
-        # Assign images to data fields where appropriate
-        image_index = 0
+        # Fallback: Use the old logic for any remaining image fields without position data
+        # This maintains backward compatibility for other parts of the system
+        remaining_image_fields = []
         for field, value in data.items():
-            if field == "_field_types":
+            if field.startswith("_"):  # Skip metadata fields
                 continue
 
-            # Look for image fields (either by field type or by field name)
+            # Look for image fields that weren't processed above
             is_image_field = False
-
-            # Check field types metadata if available
             if "_field_types" in data and field in data["_field_types"]:
                 is_image_field = data["_field_types"][field] == "image"
-
-            # Also check by common image field names
-            if not is_image_field and field.lower() in (
-                "image",
-                "logo",
-                "picture",
-                "photo",
-            ):
+            elif field.lower() in ("image", "logo", "picture", "photo"):
                 is_image_field = True
 
-            if is_image_field and value is None and image_index < len(sorted_rows):
-                # This is an image field with no value, assign the image data
-                data[field] = row_to_image[sorted_rows[image_index]]
-                image_index += 1
+            if is_image_field and value is None and field not in field_positions:
+                remaining_image_fields.append(field)
+
+        # If there are remaining image fields without position data, use the old sequential logic
+        if remaining_image_fields:
+            # Create a mapping of row numbers to images for remaining fields
+            row_to_image = {}
+            for img in images:
+                if "position" in img and "coordinates" in img["position"]:
+                    row_num = img["position"]["coordinates"]["from"]["row"]
+                    row_to_image[row_num] = {"base64": img["image_base64"]}
+                    if "path" in img:
+                        row_to_image[row_num]["path"] = img["path"]
+
+            # Sort images by row number
+            sorted_rows = sorted(row_to_image.keys())
+
+            # Assign images to remaining fields sequentially
+            image_index = 0
+            for field in remaining_image_fields:
+                if image_index < len(sorted_rows):
+                    data[field] = row_to_image[sorted_rows[image_index]]
+                    image_index += 1
 
     def _get_sheet_metadata(
         self,
