@@ -219,15 +219,296 @@ def health() -> Tuple[Dict[str, Any], int]:
 def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
     """Main file processing endpoint with enhanced image support."""
     try:
-        # Get files from request
-        excel_file = request.files.get("excel_file")
-        pptx_file = request.files.get("pptx_file")
+        # Enhanced request logging for debugging
+        content_type = request.headers.get("Content-Type", "Not specified")
+        content_length = request.headers.get("Content-Length", "Not specified")
+        user_agent = request.headers.get("User-Agent", "Not specified")
 
-        # Check if files are provided
-        if not excel_file or not pptx_file:
-            return create_error_response(
-                ValidationError("Excel and PowerPoint files are required"), 400
+        logger.info(
+            f"Merge request received - Content-Type: {content_type}, Content-Length: {content_length}"
+        )
+        logger.info(f"Merge request User-Agent: {user_agent}")
+
+        # Enhanced dual mode detection - handle incorrect Content-Type from CRM systems
+        is_json_request = request.is_json
+        has_form_data = bool(request.form)
+        has_files = bool(request.files)
+
+        # Fallback JSON detection for CRM systems that send JSON with wrong Content-Type
+        if not is_json_request and request.data and not has_form_data and not has_files:
+            try:
+                # Try to parse raw request data as JSON
+                json.loads(request.data)
+                is_json_request = True
+                logger.info(
+                    f"Detected JSON payload despite Content-Type: {content_type}"
+                )
+            except json.JSONDecodeError:
+                logger.debug("Raw request data is not valid JSON")
+
+        logger.info(
+            f"Request analysis - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}"
+        )
+
+        # Log Content-Type detection issues
+        if is_json_request and not request.is_json:
+            logger.warning(
+                f"JSON payload detected with non-standard Content-Type: {content_type}"
             )
+        elif content_type.startswith("text/plain") and request.data:
+            logger.info(
+                f"text/plain Content-Type with {len(request.data)} bytes of data"
+            )
+
+        # Log request size breakdown
+        if hasattr(request, "content_length") and request.content_length:
+            logger.info(
+                f"Actual request content length: {request.content_length} bytes ({request.content_length / (1024*1024):.2f} MB)"
+            )
+
+        # Enhanced CRM debugging: Log raw request data
+        if request.data:
+            data_preview = request.data[:500].decode('utf-8', errors='ignore') if isinstance(request.data, bytes) else str(request.data)[:500]
+            logger.info(f"Raw request data preview (first 500 chars): {data_preview}")
+            logger.info(f"Raw request data length: {len(request.data)} bytes")
+            logger.info(f"Raw request data type: {type(request.data)}")
+            
+            # Check if data looks like Deluge Map toString() format
+            if isinstance(request.data, bytes):
+                data_str = request.data.decode('utf-8', errors='ignore')
+            else:
+                data_str = str(request.data)
+            
+            # Detect common CRM patterns
+            if data_str.strip().startswith('{') and '=' in data_str and not '"' in data_str:
+                logger.warning("⚠️  Detected potential Deluge Map toString() format (key=value instead of \"key\":\"value\")")
+            elif data_str.strip().startswith('{') and '"' in data_str:
+                logger.info("✓ Detected standard JSON format")
+            else:
+                logger.info(f"Unknown data format. First 50 chars: {data_str[:50]}")
+        else:
+            logger.info("No raw request data found")
+
+        # Enhanced CRM debugging: Log ALL headers (including misspelled ones)
+        logger.info("=== ALL REQUEST HEADERS ===")
+        for header_name, header_value in request.headers.items():
+            if 'content-type' in header_name.lower():
+                logger.info(f"🔍 {header_name}: {header_value}")
+            elif 'user-agent' in header_name.lower():
+                logger.info(f"🤖 {header_name}: {header_value}")
+            else:
+                logger.info(f"   {header_name}: {header_value}")
+        
+        # Check for common CRM indicators
+        user_agent = request.headers.get("User-Agent", "").lower()
+        if "deluge" in user_agent or "zoho" in user_agent or "crm" in user_agent:
+            logger.info("🏢 CRM system detected in User-Agent")
+        
+        # Check for misspelled content-type headers
+        misspelled_content_type = request.headers.get("coontent-type") or request.headers.get("content-typ") or request.headers.get("contenttype")
+        if misspelled_content_type:
+            logger.warning(f"⚠️  Found misspelled content-type header: {misspelled_content_type}")
+        
+        logger.info("=== END HEADERS ===\n")
+
+        # Enhanced CRM debugging: Log initial detection results
+        logger.info("=== INITIAL REQUEST ANALYSIS ===")
+        logger.info(f"request.is_json: {request.is_json}")
+        logger.info(f"request.data exists: {bool(request.data)}")
+        logger.info(f"request.form exists: {has_form_data}")
+        logger.info(f"request.files exists: {has_files}")
+        logger.info(f"Initial is_json_request: {is_json_request}")
+
+        # Enhanced fallback JSON detection with detailed logging
+        if not is_json_request and request.data and not has_form_data and not has_files:
+            logger.info("🔍 Attempting fallback JSON detection...")
+            try:
+                # Try to parse raw request data as JSON
+                parsed_data = json.loads(request.data)
+                is_json_request = True
+                logger.info(
+                    f"✅ Fallback JSON parsing succeeded! Content-Type was: {content_type}"
+                )
+                logger.info(f"Parsed JSON keys: {list(parsed_data.keys()) if isinstance(parsed_data, dict) else 'Not a dict'}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"❌ Fallback JSON parsing failed: {e}")
+                logger.warning("This might be Deluge Map toString() format or other non-JSON data")
+        else:
+            logger.info("Skipping fallback JSON detection - conditions not met:")
+            logger.info(f"  - is_json_request: {is_json_request}")
+            logger.info(f"  - request.data exists: {bool(request.data)}")
+            logger.info(f"  - has_form_data: {has_form_data}")
+            logger.info(f"  - has_files: {has_files}")
+
+        logger.info(
+            f"Final request analysis - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}"
+        )
+        logger.info("=== END REQUEST ANALYSIS ===\n")
+
+        # Initialize variables for unified processing
+        excel_file = None
+        pptx_file = None
+        excel_data = None
+        pptx_data = None
+        extraction_config = {}
+
+        if is_json_request:
+            # JSON MODE: Everything as base64 strings
+            logger.info("🔄 Processing request in JSON mode (base64 files)")
+
+            try:
+                # Enhanced CRM debugging: Log parsing attempts
+                logger.info("=== JSON PARSING ATTEMPTS ===")
+                
+                # Handle both standard JSON requests and CRM systems with wrong Content-Type
+                if request.is_json:
+                    logger.info("📝 Attempting standard request.get_json()...")
+                    json_data = request.get_json()
+                    logger.info("✅ Standard JSON parsing succeeded")
+                else:
+                    # Parse raw data for systems that send JSON with text/plain Content-Type
+                    logger.info("📝 Attempting json.loads(request.data) for CRM compatibility...")
+                    json_data = json.loads(request.data)
+                    logger.info("✅ CRM compatibility JSON parsing succeeded")
+                    logger.info(
+                        "Parsed JSON from raw request data due to incorrect Content-Type"
+                    )
+
+                if not json_data:
+                    logger.error("❌ JSON data is None or empty")
+                    return create_error_response(
+                        ValidationError("JSON payload is required"), 400
+                    )
+                
+                # Enhanced CRM debugging: Log parsed data structure
+                logger.info(f"Parsed JSON data type: {type(json_data)}")
+                if isinstance(json_data, dict):
+                    logger.info(f"JSON keys found: {list(json_data.keys())}")
+                    # Log sizes of key fields for debugging
+                    for key in ['excel_file', 'pptx_file', 'config']:
+                        if key in json_data:
+                            value = json_data[key]
+                            if isinstance(value, str):
+                                logger.info(f"  {key}: {len(value)} characters")
+                            else:
+                                logger.info(f"  {key}: {type(value)}")
+                        else:
+                            logger.warning(f"  {key}: MISSING")
+                else:
+                    logger.warning(f"JSON data is not a dict: {json_data}")
+                
+                logger.info("=== END JSON PARSING ===\n")
+
+                # Extract Excel file from base64
+                excel_file_b64 = json_data.get("excel_file")
+                if not excel_file_b64:
+                    return create_error_response(
+                        ValidationError("excel_file (base64) is required in JSON mode"),
+                        400,
+                    )
+
+                # Extract PowerPoint file from base64
+                pptx_file_b64 = json_data.get("pptx_file")
+                if not pptx_file_b64:
+                    return create_error_response(
+                        ValidationError("pptx_file (base64) is required in JSON mode"),
+                        400,
+                    )
+
+                logger.info(f"Base64 Excel file size: {len(excel_file_b64)} characters")
+                logger.info(f"Base64 PowerPoint file size: {len(pptx_file_b64)} characters")
+
+                # Decode base64 Excel file
+                try:
+                    excel_data = base64.b64decode(excel_file_b64)
+                    excel_file = io.BytesIO(excel_data)
+                    excel_file.filename = json_data.get(
+                        "excel_filename", "uploaded_file.xlsx"
+                    )
+                    logger.info(f"Decoded Excel file size: {len(excel_data)} bytes")
+                except Exception as e:
+                    return create_error_response(
+                        ValidationError(f"Invalid base64 Excel file: {e}"), 400
+                    )
+
+                # Decode base64 PowerPoint file
+                try:
+                    pptx_data = base64.b64decode(pptx_file_b64)
+                    pptx_file = io.BytesIO(pptx_data)
+                    pptx_file.filename = json_data.get(
+                        "pptx_filename", "template.pptx"
+                    )
+                    logger.info(f"Decoded PowerPoint file size: {len(pptx_data)} bytes")
+                except Exception as e:
+                    return create_error_response(
+                        ValidationError(f"Invalid base64 PowerPoint file: {e}"), 400
+                    )
+
+                # Extract configuration directly from JSON
+                extraction_config = json_data.get("config", {})
+
+                logger.info("JSON mode processing completed successfully")
+
+            except json.JSONDecodeError as e:
+                logger.error("❌ JSON parsing completely failed!")
+                logger.error(f"JSON decode error: {e}")
+                logger.error("This suggests the payload is not valid JSON at all")
+                logger.error("Common causes:")
+                logger.error("  - Deluge Map toString() format: {key=value} instead of {\"key\":\"value\"}")
+                logger.error("  - Malformed JSON syntax")
+                logger.error("  - Non-JSON data sent with wrong Content-Type")
+                return create_error_response(
+                    ValidationError(f"Invalid JSON format: {e}"), 400
+                )
+
+        else:
+            # MULTIPART MODE: Binary files + JSON form fields
+            logger.info("🔄 Processing request in multipart mode (binary files)")
+
+            # Log form fields for debugging
+            if has_form_data:
+                form_fields = list(request.form.keys())
+                logger.info(f"Form fields present: {form_fields}")
+                for field in form_fields:
+                    field_size = len(request.form.get(field, ""))
+                    logger.info(f"Form field '{field}' size: {field_size} bytes")
+
+            # Log file information
+            if has_files:
+                file_info = []
+                for file_key in request.files.keys():
+                    file_obj = request.files[file_key]
+                    file_info.append(f"{file_key}: {file_obj.filename}")
+                logger.info(f"Files in request: {file_info}")
+
+            # Get files from request
+            excel_file = request.files.get("excel_file")
+            pptx_file = request.files.get("pptx_file")
+
+            # Check if files are provided
+            if not excel_file or not pptx_file:
+                return create_error_response(
+                    ValidationError("Excel and PowerPoint files are required"), 400
+                )
+
+            # Get extraction configuration from form field
+            if "config" in request.form:
+                try:
+                    extraction_config = json.loads(request.form.get("config", "{}"))
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON configuration: {e}")
+                    return jsonify({"error": f"Invalid JSON configuration: {e}"}), 400
+
+        # UNIFIED PROCESSING PATH: Both modes now have same data structure
+        # At this point we have:
+        # - excel_file: file-like object (either uploaded file or BytesIO from base64)
+        # - pptx_file: file-like object (either uploaded file or BytesIO from base64)
+        # - extraction_config: dict with configuration
+
+        logger.info(f"Processing merge request for files: {excel_file.filename}, {pptx_file.filename}")
+        logger.info(
+            f"Mode: {'JSON (base64)' if is_json_request else 'Multipart (binary)'}"
+        )
 
         # Get session ID from headers or generate a new one (needed early for auto-detection)
         session_id = request.headers.get("X-Session-ID")
@@ -254,17 +535,6 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             logger.info(
                 "Graph API credentials not found - range image extraction disabled"
             )
-
-        # Get extraction configuration
-        extraction_config = {}
-        if "config" in request.form:
-            try:
-                extraction_config = json.loads(request.form.get("config", "{}"))
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON configuration: {e}")
-                return jsonify({"error": f"Invalid JSON configuration: {e}"}), 400
-        elif request.is_json:
-            extraction_config = request.json or {}
 
         # If no configuration provided, use auto-detection
         if not extraction_config:
@@ -301,15 +571,25 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             temp_dir = temp_manager.get_session_directory(session_id)
             logger.info(f"Using session directory: {temp_dir}")
 
-            # Save uploaded files to temp directory
-            excel_path = temp_manager.save_file_to_temp(
-                temp_dir, excel_file.filename, excel_file, temp_manager.FILE_TYPE_INPUT
-            )
-            pptx_path = temp_manager.save_file_to_temp(
-                temp_dir, pptx_file.filename, pptx_file, temp_manager.FILE_TYPE_INPUT
-            )
-
-            logger.info(f"Saved input files to: {excel_path}, {pptx_path}")
+            # Save files to temp directory (works for both modes)
+            if is_json_request:
+                # For JSON mode: save decoded bytes directly
+                excel_path = temp_manager.save_file_to_temp(
+                    temp_dir, excel_file.filename, excel_data, temp_manager.FILE_TYPE_INPUT
+                )
+                pptx_path = temp_manager.save_file_to_temp(
+                    temp_dir, pptx_file.filename, pptx_data, temp_manager.FILE_TYPE_INPUT
+                )
+                logger.info(f"Saved base64-decoded files to: {excel_path}, {pptx_path}")
+            else:
+                # For multipart mode: save uploaded file objects
+                excel_path = temp_manager.save_file_to_temp(
+                    temp_dir, excel_file.filename, excel_file, temp_manager.FILE_TYPE_INPUT
+                )
+                pptx_path = temp_manager.save_file_to_temp(
+                    temp_dir, pptx_file.filename, pptx_file, temp_manager.FILE_TYPE_INPUT
+                )
+                logger.info(f"Saved uploaded files to: {excel_path}, {pptx_path}")
         else:
             # Memory-only processing
             logger.info("Processing files in memory without saving to disk")
@@ -1536,19 +1816,38 @@ def excel_pptx_merger(request):
         )
         return error_response, status_code
 
+    # Enhanced Cloud Function debugging
+    logger.info(f"🌐 Cloud Function Request: {request.method} {request.path}")
+    logger.info(f"Content-Type: {request.headers.get('Content-Type', 'Not specified')}")
+    logger.info(f"User-Agent: {request.headers.get('User-Agent', 'Not specified')}")
+    logger.info(f"Content-Length: {request.headers.get('Content-Length', 'Not specified')}")
+    logger.info(f"Has request.files: {bool(request.files)}")
+    logger.info(f"Has request.data: {bool(request.data)}")
+    logger.info(f"Has request.form: {bool(request.form)}")
+    logger.info(f"request.is_json: {request.is_json}")
+
     # Route request to the appropriate endpoint based on path
     if request.method == "POST":
         try:
             # Extract endpoint - requires excel_file and sheet_names
             if request.path == "/api/v1/extract":
+                logger.info("🔄 Routing to extract_data_endpoint()")
                 return extract_data_endpoint()
 
             # Update endpoint - handle before general file validation
             elif request.path == "/api/v1/update":
+                logger.info("🔄 Routing to update_excel_file()")
                 return update_excel_file()
 
-            # Check if files were uploaded for other endpoints
+            # Merge endpoint - handle before general file validation (supports both multipart and JSON modes)
+            elif request.path == "/api/v1/merge":
+                logger.info("🔄 Routing to merge_files() - dual mode support enabled")
+                return merge_files()
+
+            # Check if files were uploaded for other endpoints (preview, diagnose, etc.)
             if not request.files:
+                logger.warning("❌ No files found in request for endpoint requiring file uploads")
+                logger.warning("This is normal for JSON mode endpoints that bypass this check")
                 # Cloud Functions might receive files differently
                 return (
                     jsonify(
@@ -1559,8 +1858,8 @@ def excel_pptx_merger(request):
                     400,
                 )
 
-            # Merge and Preview endpoints - require both excel_file and pptx_file
-            if request.path in ["/api/v1/merge", "/api/v1/preview"]:
+            # Preview endpoint - requires both excel_file and pptx_file (multipart only)
+            if request.path == "/api/v1/preview":
                 if (
                     "excel_file" not in request.files
                     or "pptx_file" not in request.files
@@ -1578,10 +1877,7 @@ def excel_pptx_merger(request):
                     )
 
                 # Process the request using the appropriate endpoint handler
-                if request.path == "/api/v1/merge":
-                    return merge_files()
-                elif request.path == "/api/v1/preview":
-                    return preview_merge()
+                return preview_merge()
 
             # Config endpoint
             elif request.path == "/api/v1/config":
