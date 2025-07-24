@@ -165,12 +165,25 @@ def load_graph_api_config(config_file: Optional[str] = None) -> GraphAPIConfig:
     return GraphAPIConfig(config_file)
 
 
-def get_graph_api_credentials() -> Optional[Dict[str, str]]:
-    """Get Graph API credentials if available."""
+def get_graph_api_credentials(
+    tenant_id: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
+    """Get Graph API credentials if available.
+
+    Args:
+        tenant_id: Optional tenant ID from configuration to override environment variable
+    """
     config = load_graph_api_config()
 
     if config.is_configured():
-        return config.get_credentials()
+        credentials = config.get_credentials()
+
+        # Override tenant_id if provided from config
+        if tenant_id:
+            credentials["tenant_id"] = tenant_id
+            logger.info("Using tenant_id from configuration")
+
+        return credentials
     else:
         logger.warning("Graph API not configured - range image export will be disabled")
         return None

@@ -8,6 +8,7 @@ import time
 
 from src.graph_api_client import GraphAPIClient, GraphAPIError
 from src.utils.graph_api_error_handler import GraphAPIRetryableError, GraphAPIFatalError
+from src.utils.exceptions import ExcelProcessingError
 
 
 class TestGraphAPIClient:
@@ -18,7 +19,13 @@ class TestGraphAPIClient:
         self.client = GraphAPIClient(
             client_id="test_client_id",
             client_secret="test_client_secret", 
-            tenant_id="test_tenant_id"
+            tenant_id="test_tenant_id",
+            sharepoint_config={
+                "enabled": True,
+                "site_id": "test_site_id",
+                "drive_id": "test_drive_id",
+                "temp_folder_path": "/Temp/ExcelProcessing"
+            }
         )
     
     def test_init(self):
@@ -141,7 +148,7 @@ class TestGraphAPIClient:
         mock_get.return_value = mock_response
         
         with patch.object(self.client, 'authenticate', return_value='test_token'):
-            with pytest.raises(GraphAPIError, match="Expected image response"):
+            with pytest.raises(ExcelProcessingError, match="Graph API operation failed with non-retryable error"):
                 self.client.render_range_as_image(
                     item_id='test_item_id',
                     sheet_name='Sheet1',

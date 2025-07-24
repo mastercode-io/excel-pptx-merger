@@ -1,5 +1,12 @@
 """Excel data extraction and processing module with enhanced image position extraction."""
 
+# CRITICAL STARTUP VERIFICATION - This should appear in server logs immediately
+from datetime import datetime
+print("=" * 80)
+print("🚀 EXCEL_PROCESSOR.PY MODULE LOADING - UPDATED CODE VERSION")
+print(f"📅 Load timestamp: {datetime.now()}")
+print("=" * 80)
+
 import logging
 import os
 import io
@@ -54,22 +61,9 @@ class ExcelProcessor:
         self._image_cache = {}
         self._range_exporter = None
 
-        # Initialize range exporter if credentials provided
-        if graph_credentials:
-            client_id = graph_credentials.get("client_id", "")
-            log_graph_api_status(
-                client_id, "connecting", "Initializing ExcelRangeExporter"
-            )
-
-            self._range_exporter = ExcelRangeExporter(
-                client_id=client_id,
-                client_secret=graph_credentials.get("client_secret", ""),
-                tenant_id=graph_credentials.get("tenant_id", ""),
-            )
-            log_graph_api_status(
-                client_id, "connected", "ExcelRangeExporter initialized successfully"
-            )
-        else:
+        # Store Graph API credentials for later initialization
+        self._graph_credentials = graph_credentials
+        if not graph_credentials:
             range_image_logger.warning(
                 "⚠️ No Graph API credentials provided - range image extraction disabled"
             )
@@ -87,8 +81,14 @@ class ExcelProcessor:
 
         try:
             # Try to load workbook to validate format
-            self.workbook = load_workbook(self.file_path, data_only=True)
+            self.workbook = load_workbook(self.file_path, data_only=False)
             logger.info(f"Successfully loaded Excel file: {self.file_path}")
+            
+            # Initialize image cache for file-based workbooks too
+            self._image_cache = {}
+            # Pre-extract all image data immediately while file is accessible
+            self._preload_image_data()
+            
         except Exception as e:
             raise ExcelProcessingError(f"Invalid Excel file format: {e}")
 
@@ -111,7 +111,7 @@ class ExcelProcessor:
             memory_file = io.BytesIO(file_content)
 
             # Load workbook from the in-memory file
-            self.workbook = load_workbook(memory_file, data_only=True)
+            self.workbook = load_workbook(memory_file, data_only=False)
 
             # Keep reference to the memory file to prevent it from being garbage collected
             self._memory_file = memory_file
@@ -129,22 +129,27 @@ class ExcelProcessor:
 
     def _preload_image_data(self) -> None:
         """Pre-extract all image data to prevent closed file handle issues."""
-        try:
-            logger.debug("Pre-loading image data to prevent file handle issues")
-            image_count = 0
+        logger.debug("Pre-loading image data to prevent file handle issues")
+        image_count = 0
+        error_count = 0
 
-            for sheet_name in self.workbook.sheetnames:
+        for sheet_name in self.workbook.sheetnames:
+            try:
                 sheet = self.workbook[sheet_name]
 
                 # Skip hidden sheets
                 if sheet.sheet_state == "hidden":
+                    logger.debug(f"Skipping hidden sheet: {sheet_name}")
                     continue
 
                 # Check if sheet has images
-                if not hasattr(sheet, "_images"):
+                if not hasattr(sheet, "_images") or not sheet._images:
+                    logger.debug(f"Sheet {sheet_name} has no images")
                     continue
 
+                logger.debug(f"Pre-loading {len(sheet._images)} images from sheet: {sheet_name}")
                 sheet_images = []
+                
                 for idx, image in enumerate(sheet._images):
                     try:
                         # Extract image data immediately while file handle is open
@@ -160,35 +165,43 @@ class ExcelProcessor:
                             }
                             sheet_images.append(cached_image)
                             image_count += 1
+                            logger.debug(f"Successfully cached image {idx} from sheet {sheet_name}")
                         else:
-                            logger.warning(
-                                f"No data for image {idx} in sheet {sheet_name}"
-                            )
+                            logger.warning(f"No data for image {idx} in sheet {sheet_name}")
+                            # Add placeholder to maintain index consistency
+                            sheet_images.append({
+                                "data": None,
+                                "anchor": None,
+                                "original_image": image,
+                                "error": "No image data available",
+                            })
+                            error_count += 1
                     except Exception as e:
                         logger.warning(
                             f"Failed to pre-load image {idx} from sheet {sheet_name}: {e}"
                         )
                         # Add placeholder to maintain index consistency
-                        sheet_images.append(
-                            {
-                                "data": None,
-                                "anchor": None,
-                                "original_image": image,
-                                "error": str(e),
-                            }
-                        )
+                        sheet_images.append({
+                            "data": None,
+                            "anchor": None,
+                            "original_image": image,
+                            "error": str(e),
+                        })
+                        error_count += 1
 
-                if sheet_images:
-                    self._image_cache[sheet_name] = sheet_images
+                # Always cache the sheet entry, even if empty, to avoid fallback to direct access
+                self._image_cache[sheet_name] = sheet_images
+                
+            except Exception as e:
+                logger.error(f"Error processing sheet {sheet_name} during pre-load: {e}")
+                # Still add empty cache entry for this sheet to prevent direct file access
+                self._image_cache[sheet_name] = []
+                error_count += 1
 
-            logger.info(
-                f"Pre-loaded {image_count} images from {len(self._image_cache)} sheets"
-            )
-
-        except Exception as e:
-            logger.error(f"Error during image pre-loading: {e}")
-            # Initialize empty cache on error
-            self._image_cache = {}
+        logger.info(
+            f"Pre-loaded {image_count} images from {len(self._image_cache)} sheets "
+            f"({error_count} errors encountered)"
+        )
 
     def get_sheet_names(self) -> List[str]:
         """Get list of sheet names in the workbook."""
@@ -213,6 +226,14 @@ class ExcelProcessor:
             Dictionary of extracted data
         """
         try:
+            # CRITICAL DEBUG: Entry point logging to confirm server is running updated code
+            logger.info("=" * 80)
+            logger.info("🚀 EXTRACT_DATA METHOD ENTRY POINT - SERVER CODE IS UPDATED")
+            logger.info(f"📊 Global settings: {list(global_settings.keys()) if global_settings else 'None'}")
+            logger.info(f"📊 Sheet config: {list(sheet_config.keys()) if sheet_config else 'None'}")
+            logger.info(f"📊 Full config: {list(full_config.keys()) if full_config else 'None'}")
+            logger.info("=" * 80)
+            
             extracted_data = {}
 
             # Store global settings for use in other methods
@@ -230,43 +251,59 @@ class ExcelProcessor:
 
             # Extract range images if configured and enabled
             range_images = {}
-            logger.info(
-                "🔍 [RANGE_IMAGES] Checking range image extraction conditions..."
+            logger.info("🔍 CHECKING RANGE IMAGE EXTRACTION CONDITIONS")
+            # Check range image configuration
+            range_images_in_config = (
+                "range_images" in full_config if full_config else False
             )
-            logger.info(f"🔍 [RANGE_IMAGES] full_config present: {bool(full_config)}")
-            logger.info(
-                f"🔍 [RANGE_IMAGES] range_images in config: {'range_images' in full_config if full_config else False}"
+            range_images_enabled = global_settings.get("range_images", {}).get(
+                "enabled", True
             )
-            logger.info(
-                f"🔍 [RANGE_IMAGES] global_settings.range_images.enabled: {global_settings.get('range_images', {}).get('enabled', True)}"
-            )
-            logger.info(
-                f"🔍 [RANGE_IMAGES] _range_exporter initialized: {self._range_exporter is not None}"
-            )
+
+            logger.info(f"🔍 Full config exists: {full_config is not None}")
+            logger.info(f"🔍 Range images in config: {range_images_in_config}")
+            logger.info(f"🔍 Range images enabled: {range_images_enabled}")
+            logger.info(f"🔍 Graph credentials available: {bool(self._graph_credentials)}")
+            if full_config and "range_images" in full_config:
+                logger.info(f"🔍 Number of range image configs: {len(full_config['range_images'])}")
+            else:
+                logger.info("🔍 No range_images key in full_config")
 
             if (
                 full_config
                 and "range_images" in full_config
                 and global_settings.get("range_images", {}).get("enabled", True)
             ):
+                # Enable debug logging for range extraction if configured
+                if global_settings.get("range_images", {}).get("debug_logging", False):
+                    range_image_logger.enable_debug()
+                    logger.info("✅ Range extraction debug logging enabled")
+                else:
+                    range_image_logger.disable_debug()
                 logger.info(
-                    f"✅ [RANGE_IMAGES] Starting range image extraction with {len(full_config['range_images'])} configurations"
+                    f"Starting range image extraction with {len(full_config['range_images'])} configurations"
                 )
                 try:
+                    # Get SharePoint configuration from global settings
+                    sharepoint_config = global_settings.get("sharepoint", {})
+                    # Get tenant_id from config for Graph API
+                    config_tenant_id = sharepoint_config.get("tenant_id")
+
+                    # Update Graph API credentials with config tenant_id if available
+                    if config_tenant_id and self._graph_credentials:
+                        self._graph_credentials["tenant_id"] = config_tenant_id
+                        logger.info("Using tenant_id from SharePoint configuration")
+
                     range_images = self._extract_range_images(
-                        full_config["range_images"]
+                        full_config["range_images"], sharepoint_config
                     )
                     logger.info(
-                        f"✅ [RANGE_IMAGES] Successfully extracted {len(range_images)} range images"
+                        f"Successfully extracted {len(range_images)} range images"
                     )
                 except Exception as e:
-                    logger.error(
-                        f"❌ [RANGE_IMAGES] Failed to extract range images: {e}"
-                    )
+                    logger.error(f"Failed to extract range images: {e}")
             else:
-                logger.warning(
-                    "⚠️ [RANGE_IMAGES] Range image extraction skipped - conditions not met"
-                )
+                logger.debug("Range image extraction skipped - conditions not met")
 
             for sheet_name, config in sheet_config.items():
                 logger.debug(f"Processing sheet: {sheet_name}")
@@ -482,12 +519,18 @@ class ExcelProcessor:
                             # Store the exact cell position where this image field should be located
                             # Also store the original text value as fallback
                             data[mapped_key] = None
-                            field_positions[mapped_key] = {"row": values_row, "col": col, "text_fallback": value}
+                            field_positions[mapped_key] = {
+                                "row": values_row,
+                                "col": col,
+                                "text_fallback": value,
+                            }
                         elif field_type == "link":
                             # For link fields, create structured data with title and link
                             data[mapped_key] = {
                                 "title": original_key,  # Use field name as display text
-                                "link": str(value) if value is not None else ""  # Use cell value as URL
+                                "link": (
+                                    str(value) if value is not None else ""
+                                ),  # Use cell value as URL
                             }
                         else:
                             data[mapped_key] = value
@@ -532,12 +575,18 @@ class ExcelProcessor:
                             # Store the exact cell position where this image field should be located
                             # Also store the original text value as fallback
                             data[mapped_key] = None
-                            field_positions[mapped_key] = {"row": row, "col": values_col, "text_fallback": value}
+                            field_positions[mapped_key] = {
+                                "row": row,
+                                "col": values_col,
+                                "text_fallback": value,
+                            }
                         elif field_type == "link":
                             # For link fields, create structured data with title and link
                             data[mapped_key] = {
                                 "title": original_key,  # Use field name as display text
-                                "link": str(value) if value is not None else ""  # Use cell value as URL
+                                "link": (
+                                    str(value) if value is not None else ""
+                                ),  # Use cell value as URL
                             }
                         else:
                             data[mapped_key] = value
@@ -549,7 +598,7 @@ class ExcelProcessor:
             # Add field type metadata if we have any non-text fields
             if field_types:
                 data["_field_types"] = field_types
-            
+
             # Add field position metadata if we have any image fields
             if field_positions:
                 data["_field_positions"] = field_positions
@@ -920,26 +969,44 @@ class ExcelProcessor:
                     image_data = None
                     cached_image = None
 
+                    # Always try cache first, regardless of file type
                     if (
                         hasattr(self, "_image_cache")
                         and sheet_name in self._image_cache
+                        and idx < len(self._image_cache[sheet_name])
                     ):
-                        # Use cached data from memory loading
-                        if idx < len(self._image_cache[sheet_name]):
-                            cached_image = self._image_cache[sheet_name][idx]
-                            image_data = cached_image.get("data")
-                            if cached_image.get("error"):
-                                logger.warning(
-                                    f"Cannot extract image {idx} from sheet {sheet_name}: {cached_image['error']}. Skipping this image."
-                                )
-                                continue
+                        # Use cached data (available for all workbook types now)
+                        cached_image = self._image_cache[sheet_name][idx]
+                        image_data = cached_image.get("data")
+                        if cached_image.get("error"):
+                            logger.warning(
+                                f"Cannot extract image {idx} from sheet {sheet_name}: {cached_image['error']}. Skipping this image."
+                            )
+                            continue
+                        elif not image_data:
+                            logger.warning(
+                                f"No cached data for image {idx} in sheet {sheet_name}. Skipping this image."
+                            )
+                            continue
                     else:
-                        # Direct access for file-based loading
+                        # Fallback to direct access with improved error handling
                         try:
+                            logger.debug(f"Attempting direct image data access for image {idx} in sheet {sheet_name}")
                             image_data = image._data()
+                        except ValueError as e:
+                            if "I/O operation on closed file" in str(e):
+                                logger.error(
+                                    f"File handle closed for image {idx} in sheet {sheet_name}. "
+                                    f"This suggests the workbook file was closed prematurely. Skipping this image."
+                                )
+                            else:
+                                logger.warning(
+                                    f"ValueError accessing image {idx} from sheet {sheet_name}: {e}. Skipping this image."
+                                )
+                            continue
                         except Exception as e:
                             logger.warning(
-                                f"Cannot extract image {idx} from sheet {sheet_name}: {e}. Skipping this image."
+                                f"Cannot extract image {idx} from sheet {sheet_name}: {type(e).__name__}: {e}. Skipping this image."
                             )
                             continue
 
@@ -1525,9 +1592,13 @@ class ExcelProcessor:
                     text_fallback = position.get("text_fallback")
                     if text_fallback is not None:
                         data[field] = text_fallback
-                        logger.debug(f"Using text fallback for image field '{field}': {text_fallback}")
+                        logger.debug(
+                            f"Using text fallback for image field '{field}': {text_fallback}"
+                        )
                     else:
-                        logger.debug(f"No image found at position for field '{field}' at row {position['row']}, col {position['col']}")
+                        logger.debug(
+                            f"No image found at position for field '{field}' at row {position['row']}, col {position['col']}"
+                        )
 
         # Fallback: Use the old logic for any remaining image fields without position data
         # This maintains backward compatibility for other parts of the system
@@ -2075,20 +2146,97 @@ class ExcelProcessor:
 
         return config
 
+    def _initialize_range_exporter(self, sharepoint_config: Dict[str, Any]) -> None:
+        """Initialize range exporter for local processing (no longer requires Graph API)."""
+        if self._range_exporter is None:
+            range_image_logger.info("🔧 Initializing local ExcelRangeExporter")
+
+            self._range_exporter = ExcelRangeExporter()
+
+            # Set debug directory for development mode if available
+            debug_dir = getattr(self, "_debug_directory", None)
+            if debug_dir:
+                self._range_exporter.set_debug_directory(debug_dir)
+                range_image_logger.info(
+                    f"🗂️ Set debug directory for range images: {debug_dir}"
+                )
+
+            range_image_logger.info("✅ ExcelRangeExporter initialized successfully")
+
     def _extract_range_images(
-        self, range_configs_data: List[Dict[str, Any]]
+        self,
+        range_configs_data: List[Dict[str, Any]],
+        sharepoint_config: Dict[str, Any],
     ) -> Dict[str, str]:
         """Extract range images using Graph API.
 
         Args:
             range_configs_data: List of range image configurations
+            sharepoint_config: SharePoint configuration from global settings
 
         Returns:
             Dictionary mapping field_name to image file path
         """
-        range_image_logger.info(
-            f"🚀 EXTRACTION STARTED with {len(range_configs_data) if range_configs_data else 0} configurations"
+        # CRITICAL DEBUG: Log entry point and workbook state
+        range_image_logger.info("=" * 80)
+        range_image_logger.info("🚀 _extract_range_images ENTRY POINT")
+        range_image_logger.info(f"📊 Configs: {len(range_configs_data) if range_configs_data else 0}")
+        range_image_logger.info(f"📝 SharePoint config: {sharepoint_config}")
+        range_image_logger.info(f"🔍 DEBUG: _is_memory_file = {getattr(self, '_is_memory_file', 'NOT_SET')}")
+        range_image_logger.info(f"🔍 DEBUG: _memory_file exists = {hasattr(self, '_memory_file') and self._memory_file is not None}")
+        range_image_logger.info(f"🔍 DEBUG: workbook exists = {hasattr(self, 'workbook') and self.workbook is not None}")
+        range_image_logger.info("=" * 80)
+
+        # Check if SharePoint is properly configured
+        # For URL-based approach, we can proceed even if sharepoint.enabled is false
+        using_url_based_approach = (
+            hasattr(self, "_url_file_source") and self._url_file_source
         )
+
+        if not sharepoint_config.get("enabled") and not using_url_based_approach:
+            range_image_logger.warning(
+                "⚠️ SharePoint not enabled in configuration and not using URL-based approach - range image extraction skipped"
+            )
+            range_image_logger.info(
+                "💡 For range extraction, either enable SharePoint config or use SharePoint URLs"
+            )
+            return {}
+
+        range_image_logger.info(
+            f"📝 SharePoint site_id in config: {sharepoint_config.get('site_id')}"
+        )
+        range_image_logger.info(
+            f"📝 Using URL-based approach: {using_url_based_approach}"
+        )
+
+        if not sharepoint_config.get("site_id") and not using_url_based_approach:
+            range_image_logger.error(
+                "❌ SharePoint site_id not configured and not using URL-based approach - range image extraction failed"
+            )
+            range_image_logger.info(
+                "💡 NOTE: When using SharePoint URLs, you can either:"
+            )
+            range_image_logger.info(
+                "   1. Configure site_id and drive_id in config.json"
+            )
+            range_image_logger.info(
+                "   2. Use SharePoint Doc.aspx URLs (URL-based approach)"
+            )
+            return {}
+
+        # Initialize range exporter with SharePoint configuration
+        # For URL-based approach, we need modified SharePoint config
+        if using_url_based_approach:
+            # Create a modified sharepoint config that doesn't require site_id for initialization
+            modified_sharepoint_config = sharepoint_config.copy()
+            modified_sharepoint_config["enabled"] = True
+            # Remove site_id requirement for URL-based operations
+            range_image_logger.info(
+                "🔧 Modifying SharePoint config for URL-based range extraction"
+            )
+            self._initialize_range_exporter(modified_sharepoint_config)
+        else:
+            self._initialize_range_exporter(sharepoint_config)
 
         if not self._range_exporter:
             range_image_logger.error(
@@ -2111,15 +2259,6 @@ class ExcelProcessor:
                 f"✅ CONFIGURATION VALIDATION PASSED - Processing {len(range_configs)} range configurations"
             )
 
-            # Get the Excel file path for upload
-            excel_file_path = self._get_excel_file_path()
-            range_image_logger.info(f"📁 EXCEL FILE PATH: {excel_file_path}")
-            if not excel_file_path:
-                range_image_logger.error(
-                    "❌ Cannot determine Excel file path for range image export"
-                )
-                return {}
-
             # Log available sheet names for debugging
             available_sheets = list(self.workbook.sheetnames) if self.workbook else []
             range_image_logger.info(f"📊 AVAILABLE SHEETS: {available_sheets}")
@@ -2132,7 +2271,34 @@ class ExcelProcessor:
             range_image_logger.info(
                 f"🚀 STARTING EXPORT PROCESS with {len(range_configs)} configurations"
             )
-            results = self._range_exporter.export_ranges(excel_file_path, range_configs)
+
+            if using_url_based_approach:
+                # Use URL-based approach for SharePoint files
+                range_image_logger.info(
+                    f"🌐 Using URL-based range extraction for SharePoint file"
+                )
+                range_image_logger.info("🔥 ABOUT TO CALL _export_ranges_from_sharepoint_url")
+                try:
+                    results = self._export_ranges_from_sharepoint_url(range_configs)
+                    range_image_logger.info("✅ _export_ranges_from_sharepoint_url COMPLETED SUCCESSFULLY")
+                except Exception as e:
+                    range_image_logger.error(f"💥 _export_ranges_from_sharepoint_url FAILED: {e}")
+                    range_image_logger.error(f"💥 Exception type: {type(e).__name__}")
+                    import traceback
+                    range_image_logger.error(f"💥 Traceback: {traceback.format_exc()}")
+                    raise
+            else:
+                # Use traditional file upload approach
+                excel_file_path = self._get_excel_file_path()
+                range_image_logger.info(f"📁 EXCEL FILE PATH: {excel_file_path}")
+                if not excel_file_path:
+                    range_image_logger.error(
+                        "❌ Cannot determine Excel file path for range image export"
+                    )
+                    return {}
+                results = self._range_exporter.export_ranges(
+                    excel_file_path, range_configs
+                )
 
             # Process results and return mapping
             range_images = {}
@@ -2206,3 +2372,96 @@ class ExcelProcessor:
                 logger.info("Cleaned up range exporter temporary files")
             except Exception as e:
                 logger.warning(f"Failed to cleanup range exporter: {e}")
+
+    def _export_ranges_from_sharepoint_url(self, range_configs: List) -> List:
+        """Export range images from SharePoint URL using downloaded file.
+
+        Args:
+            range_configs: List of RangeImageConfig objects
+
+        Returns:
+            List of RangeImageResult objects
+        """
+        from .excel_range_exporter import RangeImageResult
+
+        # CRITICAL DEBUG: Method entry logging
+        logger.info("🚀 _export_ranges_from_sharepoint_url METHOD CALLED")
+        range_image_logger.info(
+            f"🌐 Starting URL-based range extraction from SharePoint"
+        )
+
+        try:
+            # Since we're using local processing now, we'll use the workbook already loaded
+            # The workbook should already be downloaded and loaded in self.workbook
+            if not self.workbook:
+                range_image_logger.error(
+                    "❌ No workbook loaded for range extraction"
+                )
+                return []
+
+            # Create a temporary file from the workbook for the range exporter
+            import tempfile
+            import os
+            
+            temp_file = None
+            try:
+                # Create temporary file for range extraction
+                temp_file = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+                
+                # Debug: Check memory file conditions
+                range_image_logger.info(f"🔍 DEBUG: _is_memory_file={getattr(self, '_is_memory_file', 'NOT_SET')}")
+                range_image_logger.info(f"🔍 DEBUG: _memory_file exists={hasattr(self, '_memory_file') and self._memory_file is not None}")
+                if hasattr(self, '_memory_file') and self._memory_file is not None:
+                    range_image_logger.info(f"🔍 DEBUG: _memory_file size={len(self._memory_file.getvalue())} bytes")
+                
+                # Check if workbook was loaded from memory
+                if self._is_memory_file and self._memory_file:
+                    # Copy original memory file directly instead of saving workbook
+                    # This avoids the "I/O operation on closed file" error
+                    range_image_logger.info(f"📁 Using MEMORY FILE path - copying original data")
+                    memory_data = self._memory_file.getvalue()
+                    temp_file.write(memory_data)
+                    temp_file.close()
+                    range_image_logger.info(f"📁 Copied {len(memory_data)} bytes to temp file: {temp_file.name}")
+                else:
+                    # For file-based workbooks, save normally
+                    range_image_logger.info(f"📁 Using FILE-BASED path - calling workbook.save()")
+                    temp_file.close()  # Close before saving
+                    range_image_logger.info(f"📁 About to save workbook to: {temp_file.name}")
+                    self.workbook.save(temp_file.name)
+                    range_image_logger.info(f"📁 Successfully saved workbook to temp file")
+                
+                # Use the standard export_ranges method
+                range_image_logger.info(f"📊 About to call export_ranges with {len(range_configs)} configs")
+                range_image_logger.info(f"📊 Temp file path: {temp_file.name}")
+                results = self._range_exporter.export_ranges(temp_file.name, range_configs)
+                range_image_logger.info(f"📊 export_ranges completed successfully with {len(results)} results")
+                
+                return results
+                
+            finally:
+                # Clean up temp file
+                if temp_file and os.path.exists(temp_file.name):
+                    try:
+                        os.unlink(temp_file.name)
+                    except:
+                        pass
+                        
+        except Exception as e:
+            range_image_logger.error(f"❌ URL-based range extraction failed [SOURCE:_export_ranges_from_sharepoint_url]: {e}")
+            # Return failed results for all configs
+            from .excel_range_exporter import RangeImageResult
+
+            return [
+                RangeImageResult(
+                    field_name=config.field_name,
+                    image_path="",
+                    image_data=b"",
+                    width=0,
+                    height=0,
+                    range_dimensions=(0, 0),
+                    success=False,
+                    error_message=str(e),
+                )
+                for config in range_configs
+            ]

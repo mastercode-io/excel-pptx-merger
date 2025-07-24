@@ -343,16 +343,18 @@ class PowerPointProcessor:
         logger.debug(f"🔗 Field '{field_name}' has type: {field_type}")
         if field_type == "link":
             return True
-            
+
         # Fallback: check if field value is a link object (has 'title' and 'link' keys)
         field_value = self._get_field_value(field_name, data)
         logger.debug(f"🔗 Field '{field_name}' value: {field_value}")
         if isinstance(field_value, dict):
             has_title = "title" in field_value
             has_link = "link" in field_value
-            logger.debug(f"🔗 Field '{field_name}' has title: {has_title}, has link: {has_link}")
+            logger.debug(
+                f"🔗 Field '{field_name}' has title: {has_title}, has link: {has_link}"
+            )
             return has_title and has_link
-            
+
         return False
 
     def _contains_link_field(self, text_content: str, data: Dict[str, Any]) -> bool:
@@ -771,16 +773,26 @@ class PowerPointProcessor:
                 if self._is_link_field(field_name, data):
                     # Process as hyperlink
                     logger.debug(f"🔗 Processing field '{field_name}' as hyperlink")
-                    success = self._process_link_field(field_name, field_value, paragraph, field_info)
+                    success = self._process_link_field(
+                        field_name, field_value, paragraph, field_info
+                    )
                     logger.debug(f"🔗 Hyperlink processing success: {success}")
                     if not success:
                         # Fall back to text processing if link processing fails
-                        logger.debug(f"🔗 Falling back to text processing for field '{field_name}'")
-                        field_value_str = str(field_value) if field_value is not None else ""
-                        self._replace_field_in_runs(paragraph, field_info, field_value_str)
+                        logger.debug(
+                            f"🔗 Falling back to text processing for field '{field_name}'"
+                        )
+                        field_value_str = (
+                            str(field_value) if field_value is not None else ""
+                        )
+                        self._replace_field_in_runs(
+                            paragraph, field_info, field_value_str
+                        )
                 else:
                     # Process as regular text field
-                    field_value_str = str(field_value) if field_value is not None else ""
+                    field_value_str = (
+                        str(field_value) if field_value is not None else ""
+                    )
                     self._replace_field_in_runs(paragraph, field_info, field_value_str)
 
                 iteration += 1
@@ -2069,15 +2081,17 @@ class PowerPointProcessor:
 
         return placeholders
 
-    def _process_link_field(self, field_name: str, field_value: Any, paragraph, field_info: Dict[str, Any]) -> bool:
+    def _process_link_field(
+        self, field_name: str, field_value: Any, paragraph, field_info: Dict[str, Any]
+    ) -> bool:
         """Process a link field by creating a hyperlink.
-        
+
         Args:
             field_name: The name of the field
             field_value: The field value (should be link object or string)
             paragraph: The paragraph containing the field
             field_info: Information about the field position in runs
-            
+
         Returns:
             True if the link was successfully processed, False otherwise
         """
@@ -2086,29 +2100,29 @@ class PowerPointProcessor:
             link_data = self._extract_link_data(field_value)
             if not link_data:
                 return False
-                
+
             title = link_data.get("title", "")
             url = link_data.get("link", "")
-            
+
             # Validate the URL
             if not url or not url.strip():
                 logger.warning(f"No URL provided for link field '{field_name}'")
                 return False
-                
+
             # Replace field with hyperlink
             self._replace_field_with_hyperlink(paragraph, field_info, title, url)
             return True
-            
+
         except Exception as e:
             logger.warning(f"Failed to process link field '{field_name}': {e}")
             return False
 
     def _extract_link_data(self, field_value: Any) -> Optional[Dict[str, str]]:
         """Extract link data from field value.
-        
+
         Args:
             field_value: The field value (link object or string)
-            
+
         Returns:
             Dictionary with 'title' and 'link' keys, or None if invalid
         """
@@ -2117,18 +2131,20 @@ class PowerPointProcessor:
             title = field_value.get("title", "")
             link = field_value.get("link", "")
             return {"title": title, "link": link}
-            
+
         elif isinstance(field_value, str):
             # Simple string format: use as both title and link
             return {"title": field_value, "link": field_value}
-            
+
         else:
             logger.warning(f"Invalid link field value type: {type(field_value)}")
             return None
 
-    def _replace_field_with_hyperlink(self, paragraph, field_info: Dict[str, Any], title: str, url: str) -> None:
+    def _replace_field_with_hyperlink(
+        self, paragraph, field_info: Dict[str, Any], title: str, url: str
+    ) -> None:
         """Replace a merge field with a hyperlink.
-        
+
         Args:
             paragraph: The paragraph containing the field
             field_info: Information about the field position in runs
@@ -2137,47 +2153,53 @@ class PowerPointProcessor:
         """
         try:
             affected_runs = field_info["affected_runs"]
-            
+
             if len(affected_runs) == 1:
                 # Simple case: field is entirely within one run
-                self._replace_field_in_single_run_with_hyperlink(paragraph, affected_runs[0], title, url)
+                self._replace_field_in_single_run_with_hyperlink(
+                    paragraph, affected_runs[0], title, url
+                )
             else:
                 # Complex case: field spans multiple runs
-                self._replace_field_across_runs_with_hyperlink(paragraph, affected_runs, title, url)
-                
+                self._replace_field_across_runs_with_hyperlink(
+                    paragraph, affected_runs, title, url
+                )
+
         except Exception as e:
             logger.warning(f"Failed to replace field with hyperlink: {e}")
 
-    def _replace_field_in_single_run_with_hyperlink(self, paragraph, run_info: Dict[str, Any], title: str, url: str) -> None:
+    def _replace_field_in_single_run_with_hyperlink(
+        self, paragraph, run_info: Dict[str, Any], title: str, url: str
+    ) -> None:
         """Replace field within a single run with hyperlink using precise text splitting."""
         try:
             run = run_info["run"]
             original_text = run_info["run_text"]
             field_start = run_info["field_start_in_run"]
             field_end = run_info["field_end_in_run"]
-            
+
             # Find the current run index at the time of processing
             run_index = None
             for i, p_run in enumerate(paragraph.runs):
                 if p_run == run:
                     run_index = i
                     break
-                    
+
             if run_index is None:
                 logger.warning("Could not find run in paragraph, using fallback")
                 # Fallback to simple replacement
                 new_text = (
-                    original_text[:field_start] + 
-                    title + 
-                    original_text[field_end:]
+                    original_text[:field_start] + title + original_text[field_end:]
                 )
                 run.text = new_text
                 self._apply_hyperlink_to_run(run, url)
                 return
-            
+
             # Use the new splitting approach for precise hyperlink application
-            self._split_run_for_hyperlink_by_index(paragraph, run_index, field_start, field_end, title, url)
-            
+            self._split_run_for_hyperlink_by_index(
+                paragraph, run_index, field_start, field_end, title, url
+            )
+
         except Exception as e:
             logger.warning(f"Failed to replace field in single run with hyperlink: {e}")
             # Fallback to simple replacement
@@ -2187,28 +2209,30 @@ class PowerPointProcessor:
                 field_start = run_info["field_start_in_run"]
                 field_end = run_info["field_end_in_run"]
                 new_text = (
-                    original_text[:field_start] + 
-                    title + 
-                    original_text[field_end:]
+                    original_text[:field_start] + title + original_text[field_end:]
                 )
                 run.text = new_text
                 self._apply_hyperlink_to_run(run, url)
             except Exception as fallback_e:
-                logger.warning(f"Fallback hyperlink replacement also failed: {fallback_e}")
+                logger.warning(
+                    f"Fallback hyperlink replacement also failed: {fallback_e}"
+                )
 
-    def _replace_field_across_runs_with_hyperlink(self, paragraph, affected_runs: List[Dict[str, Any]], title: str, url: str) -> None:
+    def _replace_field_across_runs_with_hyperlink(
+        self, paragraph, affected_runs: List[Dict[str, Any]], title: str, url: str
+    ) -> None:
         """Replace field that spans across multiple runs with hyperlink."""
         try:
             if not affected_runs:
                 return
-                
+
             # For multi-run fields, we'll clear the field and put the hyperlink in the first run
             first_run_info = affected_runs[0]
-            
+
             # Clear the field from all runs
             for i, run_info in enumerate(affected_runs):
                 run = run_info["run"]
-                
+
                 if i == 0:
                     # First run: replace field start with title
                     original_text = run_info["run_text"]
@@ -2228,13 +2252,21 @@ class PowerPointProcessor:
                         # Middle runs: remove everything
                         new_text = ""
                     run.text = new_text
-                    
+
         except Exception as e:
             logger.warning(f"Failed to replace field across runs with hyperlink: {e}")
 
-    def _split_run_for_hyperlink_by_index(self, paragraph, run_index: int, field_start: int, field_end: int, title: str, url: str) -> None:
+    def _split_run_for_hyperlink_by_index(
+        self,
+        paragraph,
+        run_index: int,
+        field_start: int,
+        field_end: int,
+        title: str,
+        url: str,
+    ) -> None:
         """Split a run into multiple runs to apply hyperlink only to specific text using run index.
-        
+
         Args:
             paragraph: The paragraph containing the run
             run_index: Index of the run to split
@@ -2246,20 +2278,26 @@ class PowerPointProcessor:
         try:
             run = paragraph.runs[run_index]
             original_text = run.text
-            logger.debug(f"🔗 Splitting run at index {run_index} with text: '{original_text}'")
+            logger.debug(
+                f"🔗 Splitting run at index {run_index} with text: '{original_text}'"
+            )
             logger.debug(f"🔗 Field positions: start={field_start}, end={field_end}")
-            
+
             # Text segments
             text_before = original_text[:field_start]
             text_after = original_text[field_end:]
-            
+
             # Store original formatting
             original_font = run.font
-            
+
             # Simpler approach: modify the existing run and add new runs
-            logger.debug(f"🔗 Calling _replace_run_with_segments with: text_before='{text_before}', title='{title}', text_after='{text_after}'")
-            self._replace_run_with_segments(paragraph, run_index, text_before, title, text_after, url, original_font)
-            
+            logger.debug(
+                f"🔗 Calling _replace_run_with_segments with: text_before='{text_before}', title='{title}', text_after='{text_after}'"
+            )
+            self._replace_run_with_segments(
+                paragraph, run_index, text_before, title, text_after, url, original_font
+            )
+
         except Exception as e:
             logger.warning(f"Failed to split run for hyperlink by index: {e}")
             # Fallback to simple replacement
@@ -2267,14 +2305,20 @@ class PowerPointProcessor:
                 run = paragraph.runs[run_index]
                 original_text = run.text
                 logger.debug(f"🔗 Using fallback: replacing with '{title}'")
-                run.text = original_text[:field_start] + title + original_text[field_end:]
+                run.text = (
+                    original_text[:field_start] + title + original_text[field_end:]
+                )
                 self._apply_hyperlink_to_run(run, url)
             except Exception as fallback_e:
-                logger.warning(f"Fallback hyperlink replacement also failed: {fallback_e}")
+                logger.warning(
+                    f"Fallback hyperlink replacement also failed: {fallback_e}"
+                )
 
-    def _split_run_for_hyperlink(self, paragraph, run, field_start: int, field_end: int, title: str, url: str) -> None:
+    def _split_run_for_hyperlink(
+        self, paragraph, run, field_start: int, field_end: int, title: str, url: str
+    ) -> None:
         """Split a run into multiple runs to apply hyperlink only to specific text.
-        
+
         Args:
             paragraph: The paragraph containing the run
             run: The run to split
@@ -2287,39 +2331,39 @@ class PowerPointProcessor:
             original_text = run.text
             logger.debug(f"🔗 Splitting run with text: '{original_text}'")
             logger.debug(f"🔗 Field positions: start={field_start}, end={field_end}")
-            
+
             # Get the run's position in the paragraph
             run_index = None
             for i, p_run in enumerate(paragraph.runs):
                 if p_run == run:
                     run_index = i
                     break
-                    
+
             if run_index is None:
                 logger.warning("Could not find run in paragraph")
                 return
-                
+
             # Text segments
             text_before = original_text[:field_start]
             text_after = original_text[field_end:]
-            
+
             # Store original formatting
             original_font = run.font
-            
+
             # Clear the original run
             run.text = ""
-            
+
             # Create runs in order: before, link, after
             runs_to_create = []
-            
+
             if text_before:
                 runs_to_create.append(("text", text_before))
-            
+
             runs_to_create.append(("link", title))
-            
+
             if text_after:
                 runs_to_create.append(("text", text_after))
-            
+
             # Create the new runs
             for i, (run_type, text) in enumerate(runs_to_create):
                 if i == 0:
@@ -2327,15 +2371,21 @@ class PowerPointProcessor:
                     current_run = run
                 else:
                     # Create new run after the current position
-                    current_run = paragraph.runs[run_index + i]._element.getparent().insert(
-                        run_index + i, paragraph.runs[0]._element.tag
+                    current_run = (
+                        paragraph.runs[run_index + i]
+                        ._element.getparent()
+                        .insert(run_index + i, paragraph.runs[0]._element.tag)
                     )
                     # This is complex - let me use a simpler approach
-                    
+
             # Simpler approach: modify the existing run and add new runs
-            logger.debug(f"🔗 Calling _replace_run_with_segments with: text_before='{text_before}', title='{title}', text_after='{text_after}'")
-            self._replace_run_with_segments(paragraph, run_index, text_before, title, text_after, url, original_font)
-            
+            logger.debug(
+                f"🔗 Calling _replace_run_with_segments with: text_before='{text_before}', title='{title}', text_after='{text_after}'"
+            )
+            self._replace_run_with_segments(
+                paragraph, run_index, text_before, title, text_after, url, original_font
+            )
+
         except Exception as e:
             logger.warning(f"Failed to split run for hyperlink: {e}")
             # Fallback to simple replacement
@@ -2343,22 +2393,31 @@ class PowerPointProcessor:
             run.text = original_text[:field_start] + title + original_text[field_end:]
             self._apply_hyperlink_to_run(run, url)
 
-    def _replace_run_with_segments(self, paragraph, run_index: int, text_before: str, link_text: str, text_after: str, url: str, original_font) -> None:
+    def _replace_run_with_segments(
+        self,
+        paragraph,
+        run_index: int,
+        text_before: str,
+        link_text: str,
+        text_after: str,
+        url: str,
+        original_font,
+    ) -> None:
         """Replace a run with multiple segments for precise hyperlink application.
-        
+
         Args:
             paragraph: The paragraph containing the run
             run_index: Index of the run to replace
             text_before: Text before the hyperlink
             link_text: Text for the hyperlink
-            text_after: Text after the hyperlink  
+            text_after: Text after the hyperlink
             url: The URL for the hyperlink
             original_font: Original font formatting to preserve
         """
         try:
             # Remove the original run (we'll replace it with new ones)
             original_run = paragraph.runs[run_index]
-            
+
             # Keep track of segments to create
             segments = []
             if text_before:
@@ -2367,38 +2426,46 @@ class PowerPointProcessor:
                 segments.append(("link", link_text))
             if text_after:
                 segments.append(("text", text_after))
-                
+
             logger.debug(f"🔗 Creating segments: {segments}")
-                
+
             # Set the first segment in the existing run
             if segments:
                 first_type, first_text = segments[0]
-                logger.debug(f"🔗 Setting first segment in original run: '{first_text}' (type: {first_type})")
+                logger.debug(
+                    f"🔗 Setting first segment in original run: '{first_text}' (type: {first_type})"
+                )
                 original_run.text = first_text
                 if first_type == "link":
-                    logger.debug(f"🔗 Applying hyperlink to original run: '{first_text}'")
+                    logger.debug(
+                        f"🔗 Applying hyperlink to original run: '{first_text}'"
+                    )
                     self._apply_hyperlink_to_run(original_run, url)
-                
+
                 # Add additional runs for remaining segments
                 for segment_type, segment_text in segments[1:]:
                     # Add a new run after the current run
                     new_run = paragraph.add_run(segment_text)
-                    logger.debug(f"🔗 Added new run: '{segment_text}' (type: {segment_type})")
-                    
+                    logger.debug(
+                        f"🔗 Added new run: '{segment_text}' (type: {segment_type})"
+                    )
+
                     # Copy formatting from original run
                     self._copy_run_formatting(original_font, new_run.font)
-                    
+
                     # Apply hyperlink if this is a link segment
                     if segment_type == "link":
-                        logger.debug(f"🔗 Applying hyperlink to new run: '{segment_text}'")
+                        logger.debug(
+                            f"🔗 Applying hyperlink to new run: '{segment_text}'"
+                        )
                         self._apply_hyperlink_to_run(new_run, url)
-            
+
         except Exception as e:
             logger.warning(f"Failed to replace run with segments: {e}")
 
     def _copy_run_formatting(self, source_font, target_font) -> None:
         """Copy formatting from source font to target font.
-        
+
         Args:
             source_font: Source font to copy from
             target_font: Target font to copy to
@@ -2414,14 +2481,14 @@ class PowerPointProcessor:
                 target_font.italic = source_font.italic
             if source_font.underline is not None:
                 target_font.underline = source_font.underline
-            if hasattr(source_font, 'color') and source_font.color:
+            if hasattr(source_font, "color") and source_font.color:
                 target_font.color.rgb = source_font.color.rgb
         except Exception as e:
             logger.debug(f"Could not copy some font formatting: {e}")
 
     def _apply_hyperlink_to_run(self, run, url: str) -> None:
         """Apply hyperlink to a text run using python-pptx API.
-        
+
         Args:
             run: The text run to apply hyperlink to
             url: The URL for the hyperlink
@@ -2430,9 +2497,11 @@ class PowerPointProcessor:
             if url and url.strip():
                 hlink = run.hyperlink
                 hlink.address = url.strip()
-                logger.debug(f"🔗 Applied hyperlink '{url}' to run with text '{run.text}'")
+                logger.debug(
+                    f"🔗 Applied hyperlink '{url}' to run with text '{run.text}'"
+                )
             else:
                 logger.warning("Cannot apply empty URL as hyperlink")
-                
+
         except Exception as e:
             logger.warning(f"Failed to apply hyperlink to run: {e}")

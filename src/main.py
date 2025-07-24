@@ -1,10 +1,17 @@
 """Main API handler with Flask and Google Cloud Function support - Enhanced with image position support."""
 
+import datetime
+
+# CRITICAL STARTUP VERIFICATION - Server code reload confirmation
+print("🌟" * 30)
+print("🚀 MAIN.PY MODULE LOADING - SERVER UPDATED CODE")
+print(f"📅 Server start time: {datetime.datetime.now()}")
+print("🌟" * 30)
+
 import json
 import logging
 import os
 import traceback
-import datetime
 import copy
 import base64
 import io
@@ -34,6 +41,7 @@ from .utils.exceptions import (
 from .utils.validation import validate_api_request
 from .utils.file_utils import save_uploaded_file, get_file_info
 from .utils.range_image_logger import setup_range_image_debug_mode
+from .utils.request_handler import RequestPayloadDetector, PayloadParser
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -54,6 +62,12 @@ app.config["MAX_FORM_MEMORY_SIZE"] = (
 def setup_logging() -> None:
     """Setup logging configuration."""
     log_level = app_config.get("log_level", "INFO").upper()
+    verbose_logging = os.environ.get("VERBOSE_LOGGING", "true").lower() == "true"
+    
+    # If verbose logging is disabled, increase the default log level
+    if not verbose_logging and log_level in ["DEBUG", "INFO"]:
+        log_level = "WARNING"
+    
     logging.getLogger().setLevel(getattr(logging, log_level, logging.INFO))
 
     # Set up format
@@ -65,17 +79,23 @@ def setup_logging() -> None:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logging.getLogger().addHandler(console_handler)
+    
+    # Suppress verbose loggers when VERBOSE_LOGGING is false
+    if not verbose_logging:
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)
+        logging.getLogger("PIL").setLevel(logging.WARNING)
 
-    # Log Flask configuration limits
-    max_content_length = app.config.get("MAX_CONTENT_LENGTH", 0)
-    max_form_memory_size = app.config.get("MAX_FORM_MEMORY_SIZE", 0)
+    # Log Flask configuration limits only in verbose mode
+    if verbose_logging:
+        max_content_length = app.config.get("MAX_CONTENT_LENGTH", 0)
+        max_form_memory_size = app.config.get("MAX_FORM_MEMORY_SIZE", 0)
 
-    logger.info(
-        f"Flask configuration - MAX_CONTENT_LENGTH: {max_content_length / (1024*1024):.1f}MB"
-    )
-    logger.info(
-        f"Flask configuration - MAX_FORM_MEMORY_SIZE: {max_form_memory_size / (1024*1024):.1f}MB"
-    )
+        logger.info(
+            f"Flask configuration - MAX_CONTENT_LENGTH: {max_content_length / (1024*1024):.1f}MB"
+        )
+        logger.info(
+            f"Flask configuration - MAX_FORM_MEMORY_SIZE: {max_form_memory_size / (1024*1024):.1f}MB"
+        )
 
 
 def authenticate_request() -> bool:
@@ -218,6 +238,29 @@ def health() -> Tuple[Dict[str, Any], int]:
 @app.route("/api/v1/merge", methods=["POST"])
 def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
     """Main file processing endpoint with enhanced image support."""
+    
+    # CRITICAL REQUEST TRACKING
+    logger.info("🌟" * 50)
+    logger.info("🚀 /api/v1/merge ENDPOINT HIT - REQUEST RECEIVED")
+    logger.info(f"📊 Request method: {request.method}")
+    logger.info(f"📊 Request path: {request.path}")
+    logger.info(f"📊 Request args: {dict(request.args)}")
+    logger.info(f"📊 Has files: {bool(request.files)}")
+    logger.info(f"📊 Has form: {bool(request.form)}")
+    logger.info(f"📊 Is JSON: {request.is_json}")
+    logger.info(f"📊 User-Agent: {request.headers.get('User-Agent', 'Not specified')}")
+    logger.info(f"📊 Content-Type: {request.headers.get('Content-Type', 'Not specified')}")
+    logger.info(f"📊 Content-Length: {request.headers.get('Content-Length', 'Not specified')}")
+    
+    # Check for CRM system indicators
+    user_agent = request.headers.get("User-Agent", "").lower()
+    crm_indicators = ["deluge", "zoho", "crm", "automation", "webhook", "postman"]
+    is_likely_crm = any(indicator in user_agent for indicator in crm_indicators)
+    if is_likely_crm:
+        logger.info("🏢 POTENTIAL CRM/AUTOMATION SYSTEM DETECTED!")
+    
+    logger.info("🌟" * 50)
+    
     try:
         # Enhanced request logging for debugging
         content_type = request.headers.get("Content-Type", "Not specified")
@@ -268,21 +311,31 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
 
         # Enhanced CRM debugging: Log raw request data
         if request.data:
-            data_preview = request.data[:500].decode('utf-8', errors='ignore') if isinstance(request.data, bytes) else str(request.data)[:500]
+            data_preview = (
+                request.data[:500].decode("utf-8", errors="ignore")
+                if isinstance(request.data, bytes)
+                else str(request.data)[:500]
+            )
             logger.info(f"Raw request data preview (first 500 chars): {data_preview}")
             logger.info(f"Raw request data length: {len(request.data)} bytes")
             logger.info(f"Raw request data type: {type(request.data)}")
-            
+
             # Check if data looks like Deluge Map toString() format
             if isinstance(request.data, bytes):
-                data_str = request.data.decode('utf-8', errors='ignore')
+                data_str = request.data.decode("utf-8", errors="ignore")
             else:
                 data_str = str(request.data)
-            
+
             # Detect common CRM patterns
-            if data_str.strip().startswith('{') and '=' in data_str and not '"' in data_str:
-                logger.warning("⚠️  Detected potential Deluge Map toString() format (key=value instead of \"key\":\"value\")")
-            elif data_str.strip().startswith('{') and '"' in data_str:
+            if (
+                data_str.strip().startswith("{")
+                and "=" in data_str
+                and not '"' in data_str
+            ):
+                logger.warning(
+                    '⚠️  Detected potential Deluge Map toString() format (key=value instead of "key":"value")'
+                )
+            elif data_str.strip().startswith("{") and '"' in data_str:
                 logger.info("✓ Detected standard JSON format")
             else:
                 logger.info(f"Unknown data format. First 50 chars: {data_str[:50]}")
@@ -292,23 +345,29 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         # Enhanced CRM debugging: Log ALL headers (including misspelled ones)
         logger.info("=== ALL REQUEST HEADERS ===")
         for header_name, header_value in request.headers.items():
-            if 'content-type' in header_name.lower():
+            if "content-type" in header_name.lower():
                 logger.info(f"🔍 {header_name}: {header_value}")
-            elif 'user-agent' in header_name.lower():
+            elif "user-agent" in header_name.lower():
                 logger.info(f"🤖 {header_name}: {header_value}")
             else:
                 logger.info(f"   {header_name}: {header_value}")
-        
+
         # Check for common CRM indicators
         user_agent = request.headers.get("User-Agent", "").lower()
         if "deluge" in user_agent or "zoho" in user_agent or "crm" in user_agent:
             logger.info("🏢 CRM system detected in User-Agent")
-        
+
         # Check for misspelled content-type headers
-        misspelled_content_type = request.headers.get("coontent-type") or request.headers.get("content-typ") or request.headers.get("contenttype")
+        misspelled_content_type = (
+            request.headers.get("coontent-type")
+            or request.headers.get("content-typ")
+            or request.headers.get("contenttype")
+        )
         if misspelled_content_type:
-            logger.warning(f"⚠️  Found misspelled content-type header: {misspelled_content_type}")
-        
+            logger.warning(
+                f"⚠️  Found misspelled content-type header: {misspelled_content_type}"
+            )
+
         logger.info("=== END HEADERS ===\n")
 
         # Enhanced CRM debugging: Log initial detection results
@@ -329,10 +388,14 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 logger.info(
                     f"✅ Fallback JSON parsing succeeded! Content-Type was: {content_type}"
                 )
-                logger.info(f"Parsed JSON keys: {list(parsed_data.keys()) if isinstance(parsed_data, dict) else 'Not a dict'}")
+                logger.info(
+                    f"Parsed JSON keys: {list(parsed_data.keys()) if isinstance(parsed_data, dict) else 'Not a dict'}"
+                )
             except json.JSONDecodeError as e:
                 logger.warning(f"❌ Fallback JSON parsing failed: {e}")
-                logger.warning("This might be Deluge Map toString() format or other non-JSON data")
+                logger.warning(
+                    "This might be Deluge Map toString() format or other non-JSON data"
+                )
         else:
             logger.info("Skipping fallback JSON detection - conditions not met:")
             logger.info(f"  - is_json_request: {is_json_request}")
@@ -351,6 +414,10 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         excel_data = None
         pptx_data = None
         extraction_config = {}
+        sharepoint_excel_url = None
+        sharepoint_excel_id = None
+        sharepoint_pptx_url = None
+        sharepoint_pptx_id = None
 
         if is_json_request:
             # JSON MODE: Everything as base64 strings
@@ -359,7 +426,7 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             try:
                 # Enhanced CRM debugging: Log parsing attempts
                 logger.info("=== JSON PARSING ATTEMPTS ===")
-                
+
                 # Handle both standard JSON requests and CRM systems with wrong Content-Type
                 if request.is_json:
                     logger.info("📝 Attempting standard request.get_json()...")
@@ -367,7 +434,9 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                     logger.info("✅ Standard JSON parsing succeeded")
                 else:
                     # Parse raw data for systems that send JSON with text/plain Content-Type
-                    logger.info("📝 Attempting json.loads(request.data) for CRM compatibility...")
+                    logger.info(
+                        "📝 Attempting json.loads(request.data) for CRM compatibility..."
+                    )
                     json_data = json.loads(request.data)
                     logger.info("✅ CRM compatibility JSON parsing succeeded")
                     logger.info(
@@ -379,13 +448,13 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                     return create_error_response(
                         ValidationError("JSON payload is required"), 400
                     )
-                
+
                 # Enhanced CRM debugging: Log parsed data structure
                 logger.info(f"Parsed JSON data type: {type(json_data)}")
                 if isinstance(json_data, dict):
                     logger.info(f"JSON keys found: {list(json_data.keys())}")
                     # Log sizes of key fields for debugging
-                    for key in ['excel_file', 'pptx_file', 'config']:
+                    for key in ["excel_file", "pptx_file", "config"]:
                         if key in json_data:
                             value = json_data[key]
                             if isinstance(value, str):
@@ -396,53 +465,88 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                             logger.warning(f"  {key}: MISSING")
                 else:
                     logger.warning(f"JSON data is not a dict: {json_data}")
-                
+
                 logger.info("=== END JSON PARSING ===\n")
 
-                # Extract Excel file from base64
+                # Check for SharePoint references
+                sharepoint_excel_url = json_data.get("sharepoint_excel_url")
+                sharepoint_excel_id = json_data.get("sharepoint_excel_id")
+                sharepoint_pptx_url = json_data.get("sharepoint_pptx_url")
+                sharepoint_pptx_id = json_data.get("sharepoint_pptx_id")
+
+                # Extract Excel file from base64 or SharePoint
                 excel_file_b64 = json_data.get("excel_file")
-                if not excel_file_b64:
+                has_excel_source = (
+                    excel_file_b64 or sharepoint_excel_url or sharepoint_excel_id
+                )
+
+                if not has_excel_source:
                     return create_error_response(
-                        ValidationError("excel_file (base64) is required in JSON mode"),
+                        ValidationError(
+                            "excel_file (base64), sharepoint_excel_url, or sharepoint_excel_id is required"
+                        ),
                         400,
                     )
 
-                # Extract PowerPoint file from base64
+                # Extract PowerPoint file from base64 or SharePoint
                 pptx_file_b64 = json_data.get("pptx_file")
-                if not pptx_file_b64:
+                has_pptx_source = (
+                    pptx_file_b64 or sharepoint_pptx_url or sharepoint_pptx_id
+                )
+
+                if not has_pptx_source:
                     return create_error_response(
-                        ValidationError("pptx_file (base64) is required in JSON mode"),
+                        ValidationError(
+                            "pptx_file (base64), sharepoint_pptx_url, or sharepoint_pptx_id is required"
+                        ),
                         400,
                     )
 
-                logger.info(f"Base64 Excel file size: {len(excel_file_b64)} characters")
-                logger.info(f"Base64 PowerPoint file size: {len(pptx_file_b64)} characters")
-
-                # Decode base64 Excel file
-                try:
-                    excel_data = base64.b64decode(excel_file_b64)
-                    excel_file = io.BytesIO(excel_data)
-                    excel_file.filename = json_data.get(
-                        "excel_filename", "uploaded_file.xlsx"
+                # Log file sizes if base64 provided
+                if excel_file_b64:
+                    logger.info(
+                        f"Base64 Excel file size: {len(excel_file_b64)} characters"
                     )
-                    logger.info(f"Decoded Excel file size: {len(excel_data)} bytes")
-                except Exception as e:
-                    return create_error_response(
-                        ValidationError(f"Invalid base64 Excel file: {e}"), 400
+                if pptx_file_b64:
+                    logger.info(
+                        f"Base64 PowerPoint file size: {len(pptx_file_b64)} characters"
                     )
 
-                # Decode base64 PowerPoint file
-                try:
-                    pptx_data = base64.b64decode(pptx_file_b64)
-                    pptx_file = io.BytesIO(pptx_data)
-                    pptx_file.filename = json_data.get(
-                        "pptx_filename", "template.pptx"
-                    )
-                    logger.info(f"Decoded PowerPoint file size: {len(pptx_data)} bytes")
-                except Exception as e:
-                    return create_error_response(
-                        ValidationError(f"Invalid base64 PowerPoint file: {e}"), 400
-                    )
+                # Initialize file variables
+                excel_file = None
+                pptx_file = None
+                excel_data = None
+                pptx_data = None
+
+                # Decode base64 Excel file if provided
+                if excel_file_b64:
+                    try:
+                        excel_data = base64.b64decode(excel_file_b64)
+                        excel_file = io.BytesIO(excel_data)
+                        excel_file.filename = json_data.get(
+                            "excel_filename", "uploaded_file.xlsx"
+                        )
+                        logger.info(f"Decoded Excel file size: {len(excel_data)} bytes")
+                    except Exception as e:
+                        return create_error_response(
+                            ValidationError(f"Invalid base64 Excel file: {e}"), 400
+                        )
+
+                # Decode base64 PowerPoint file if provided
+                if pptx_file_b64:
+                    try:
+                        pptx_data = base64.b64decode(pptx_file_b64)
+                        pptx_file = io.BytesIO(pptx_data)
+                        pptx_file.filename = json_data.get(
+                            "pptx_filename", "template.pptx"
+                        )
+                        logger.info(
+                            f"Decoded PowerPoint file size: {len(pptx_data)} bytes"
+                        )
+                    except Exception as e:
+                        return create_error_response(
+                            ValidationError(f"Invalid base64 PowerPoint file: {e}"), 400
+                        )
 
                 # Extract configuration directly from JSON
                 extraction_config = json_data.get("config", {})
@@ -454,7 +558,9 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 logger.error(f"JSON decode error: {e}")
                 logger.error("This suggests the payload is not valid JSON at all")
                 logger.error("Common causes:")
-                logger.error("  - Deluge Map toString() format: {key=value} instead of {\"key\":\"value\"}")
+                logger.error(
+                    '  - Deluge Map toString() format: {key=value} instead of {"key":"value"}'
+                )
                 logger.error("  - Malformed JSON syntax")
                 logger.error("  - Non-JSON data sent with wrong Content-Type")
                 return create_error_response(
@@ -481,14 +587,26 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                     file_info.append(f"{file_key}: {file_obj.filename}")
                 logger.info(f"Files in request: {file_info}")
 
+            # Get SharePoint parameters
+            sharepoint_excel_url = request.form.get("sharepoint_excel_url")
+            sharepoint_excel_id = request.form.get("sharepoint_excel_id")
+            sharepoint_pptx_url = request.form.get("sharepoint_pptx_url")
+            sharepoint_pptx_id = request.form.get("sharepoint_pptx_id")
+
             # Get files from request
             excel_file = request.files.get("excel_file")
             pptx_file = request.files.get("pptx_file")
 
-            # Check if files are provided
-            if not excel_file or not pptx_file:
+            # Check if files are provided (either upload or SharePoint reference)
+            has_excel_source = excel_file or sharepoint_excel_url or sharepoint_excel_id
+            has_pptx_source = pptx_file or sharepoint_pptx_url or sharepoint_pptx_id
+
+            if not has_excel_source or not has_pptx_source:
                 return create_error_response(
-                    ValidationError("Excel and PowerPoint files are required"), 400
+                    ValidationError(
+                        "Excel and PowerPoint files are required (either as uploads or SharePoint references)"
+                    ),
+                    400,
                 )
 
             # Get extraction configuration from form field
@@ -504,11 +622,33 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         # - excel_file: file-like object (either uploaded file or BytesIO from base64)
         # - pptx_file: file-like object (either uploaded file or BytesIO from base64)
         # - extraction_config: dict with configuration
+        # - sharepoint_excel_url, sharepoint_excel_id, sharepoint_pptx_url, sharepoint_pptx_id: SharePoint references
 
-        logger.info(f"Processing merge request for files: {excel_file.filename}, {pptx_file.filename}")
+        # Log processing mode
         logger.info(
             f"Mode: {'JSON (base64)' if is_json_request else 'Multipart (binary)'}"
         )
+
+        # Log file source information
+        if excel_file or sharepoint_excel_url or sharepoint_excel_id:
+            if excel_file:
+                logger.info(
+                    f"Excel source: Uploaded/Base64 file ({excel_file.filename})"
+                )
+            elif sharepoint_excel_url:
+                logger.info(f"Excel source: SharePoint URL")
+            elif sharepoint_excel_id:
+                logger.info(f"Excel source: SharePoint ID ({sharepoint_excel_id})")
+
+        if pptx_file or sharepoint_pptx_url or sharepoint_pptx_id:
+            if pptx_file:
+                logger.info(
+                    f"PowerPoint source: Uploaded/Base64 file ({pptx_file.filename})"
+                )
+            elif sharepoint_pptx_url:
+                logger.info(f"PowerPoint source: SharePoint URL")
+            elif sharepoint_pptx_id:
+                logger.info(f"PowerPoint source: SharePoint ID ({sharepoint_pptx_id})")
 
         # Get session ID from headers or generate a new one (needed early for auto-detection)
         session_id = request.headers.get("X-Session-ID")
@@ -524,8 +664,17 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             f"File saving mode: {'enabled' if save_files else 'disabled (memory-only)'}"
         )
 
-        # Load Graph API credentials for range image extraction
-        graph_credentials = get_graph_api_credentials()
+        # Get SharePoint configuration early (needed for tenant_id)
+        if not extraction_config:
+            extraction_config = {}
+        sharepoint_config = extraction_config.get("global_settings", {}).get(
+            "sharepoint", {}
+        )
+
+        # Load Graph API credentials with tenant_id from config
+        config_tenant_id = sharepoint_config.get("tenant_id")
+        graph_credentials = get_graph_api_credentials(config_tenant_id)
+
         if graph_credentials:
             logger.info("Graph API credentials loaded - range image extraction enabled")
             logger.debug(
@@ -535,6 +684,92 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             logger.info(
                 "Graph API credentials not found - range image extraction disabled"
             )
+
+        # Handle SharePoint file sources
+        if (
+            sharepoint_excel_url
+            or sharepoint_excel_id
+            or sharepoint_pptx_url
+            or sharepoint_pptx_id
+        ):
+            if not graph_credentials:
+                return create_error_response(
+                    ValidationError(
+                        "Graph API credentials required for SharePoint file access"
+                    ),
+                    400,
+                )
+
+            # Minimal validation - URLs can auto-resolve site/drive info
+            if not sharepoint_config.get("enabled"):
+                return create_error_response(
+                    ValidationError(
+                        "SharePoint must be enabled in config.global_settings.sharepoint"
+                    ),
+                    400,
+                )
+
+            try:
+                # Initialize Graph API client with SharePoint config
+                from .graph_api_client import GraphAPIClient
+
+                graph_client = GraphAPIClient(
+                    client_id=graph_credentials["client_id"],
+                    client_secret=graph_credentials["client_secret"],
+                    tenant_id=graph_credentials["tenant_id"],
+                    sharepoint_config=sharepoint_config,
+                )
+
+                # Download Excel file from SharePoint if needed
+                if sharepoint_excel_url or sharepoint_excel_id:
+                    if sharepoint_excel_url:
+                        # Use direct download via Shares API for URLs
+                        excel_file_data = graph_client.download_file_from_sharing_url(
+                            sharepoint_excel_url
+                        )
+                    else:
+                        # Use item ID download for direct IDs
+                        excel_file_data = graph_client.download_file_to_memory(
+                            sharepoint_excel_id
+                        )
+
+                    excel_file = io.BytesIO(excel_file_data)
+                    excel_file.filename = "sharepoint_excel.xlsx"
+                    if is_json_request:
+                        excel_data = excel_file_data  # Store for later file saving
+
+                    logger.info(
+                        f"Downloaded Excel file from SharePoint: {len(excel_file_data)} bytes"
+                    )
+
+                # Download PowerPoint file from SharePoint if needed
+                if sharepoint_pptx_url or sharepoint_pptx_id:
+                    if sharepoint_pptx_url:
+                        # Use direct download via Shares API for URLs
+                        pptx_file_data = graph_client.download_file_from_sharing_url(
+                            sharepoint_pptx_url
+                        )
+                    else:
+                        # Use item ID download for direct IDs
+                        pptx_file_data = graph_client.download_file_to_memory(
+                            sharepoint_pptx_id
+                        )
+
+                    pptx_file = io.BytesIO(pptx_file_data)
+                    pptx_file.filename = "sharepoint_template.pptx"
+                    if is_json_request:
+                        pptx_data = pptx_file_data  # Store for later file saving
+
+                    logger.info(
+                        f"Downloaded PowerPoint file from SharePoint: {len(pptx_file_data)} bytes"
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to download file from SharePoint: {e}")
+                return create_error_response(
+                    ValidationError(f"Failed to download file from SharePoint: {e}"),
+                    400,
+                )
 
         # If no configuration provided, use auto-detection
         if not extraction_config:
@@ -575,19 +810,31 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             if is_json_request:
                 # For JSON mode: save decoded bytes directly
                 excel_path = temp_manager.save_file_to_temp(
-                    temp_dir, excel_file.filename, excel_data, temp_manager.FILE_TYPE_INPUT
+                    temp_dir,
+                    excel_file.filename,
+                    excel_data,
+                    temp_manager.FILE_TYPE_INPUT,
                 )
                 pptx_path = temp_manager.save_file_to_temp(
-                    temp_dir, pptx_file.filename, pptx_data, temp_manager.FILE_TYPE_INPUT
+                    temp_dir,
+                    pptx_file.filename,
+                    pptx_data,
+                    temp_manager.FILE_TYPE_INPUT,
                 )
                 logger.info(f"Saved base64-decoded files to: {excel_path}, {pptx_path}")
             else:
                 # For multipart mode: save uploaded file objects
                 excel_path = temp_manager.save_file_to_temp(
-                    temp_dir, excel_file.filename, excel_file, temp_manager.FILE_TYPE_INPUT
+                    temp_dir,
+                    excel_file.filename,
+                    excel_file,
+                    temp_manager.FILE_TYPE_INPUT,
                 )
                 pptx_path = temp_manager.save_file_to_temp(
-                    temp_dir, pptx_file.filename, pptx_file, temp_manager.FILE_TYPE_INPUT
+                    temp_dir,
+                    pptx_file.filename,
+                    pptx_file,
+                    temp_manager.FILE_TYPE_INPUT,
                 )
                 logger.info(f"Saved uploaded files to: {excel_path}, {pptx_path}")
         else:
@@ -599,6 +846,19 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             excel_processor = ExcelProcessor(excel_path, graph_credentials)
         else:
             excel_processor = ExcelProcessor(excel_file, graph_credentials)
+
+        # Set URL source for range extraction if SharePoint URL was used
+        if sharepoint_excel_url:
+            excel_processor._url_file_source = sharepoint_excel_url
+            logger.info(
+                f"Set SharePoint URL source for range extraction: {sharepoint_excel_url}"
+            )
+
+        # Set debug directory for range images in development mode
+        if app_config.get("development_mode", False) and save_files and temp_dir:
+            debug_dir = os.path.join(temp_dir, temp_manager.FILE_TYPE_DEBUG)
+            excel_processor._debug_directory = debug_dir
+            logger.info(f"Set debug directory for range images: {debug_dir}")
 
         try:
             try:
@@ -1131,25 +1391,57 @@ def manage_config() -> Tuple[Dict[str, Any], int]:
 @app.route("/api/v1/extract", methods=["POST"])
 def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
     """Extract data from specified Excel sheets and return as JSON."""
+    
+    # CRITICAL REQUEST TRACKING  
+    logger.info("🟢" * 50)
+    logger.info("🚀 /api/v1/extract ENDPOINT HIT - REQUEST RECEIVED")
+    
+    # Use request handler for logging and detection
+    RequestPayloadDetector.log_request_info(request)
+    
+    logger.info("🟢" * 50)
     start_time = datetime.datetime.now()
 
     try:
-        # Validate request
-        if "excel_file" not in request.files:
-            return create_error_response(ValidationError("Excel file is required"), 400)
+        # Detect payload mode using request handler
+        is_json_request, has_form_data, has_files = RequestPayloadDetector.detect_payload_mode(request)
+        
+        # Initialize payload parser
+        parser = PayloadParser(request, is_json_request)
+        
+        logger.info(
+            f"Extract request mode - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}"
+        )
+        
+        # Get SharePoint info from request (supports both naming conventions)
+        sharepoint_url, sharepoint_item_id = parser.get_sharepoint_info()
 
-        excel_file = request.files["excel_file"]
-
-        # Get sheet_names parameter (required)
-        sheet_names_param = request.form.get("sheet_names")
-        if not sheet_names_param:
+        # Get excel file from request
+        excel_file = None
+        try:
+            excel_file = parser.get_file("excel_file", required=False)
+        except ValidationError as e:
+            # File is only required if no SharePoint reference
+            if not sharepoint_url and not sharepoint_item_id:
+                return create_error_response(
+                    ValidationError(
+                        "Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"
+                    ),
+                    400,
+                )
+        
+        # Validate request - either file upload OR SharePoint reference
+        if not sharepoint_url and not sharepoint_item_id and not excel_file:
             return create_error_response(
-                ValidationError("sheet_names parameter is required"), 400
+                ValidationError(
+                    "Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"
+                ),
+                400,
             )
 
-        # Parse sheet_names - should be a JSON array of strings
+        # Get sheet_names parameter (required)
         try:
-            sheet_names = json.loads(sheet_names_param)
+            sheet_names = parser.get_json_param("sheet_names", required=True)
             if not isinstance(sheet_names, list):
                 return create_error_response(
                     ValidationError("sheet_names must be a list of strings"), 400
@@ -1167,29 +1459,28 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
                     ValidationError("sheet_names list cannot be empty"), 400
                 )
 
-        except json.JSONDecodeError as e:
-            return create_error_response(
-                ValidationError(f"Invalid JSON in sheet_names parameter: {e}"), 400
-            )
+        except ValidationError as e:
+            return create_error_response(e, 400)
 
         # Get configuration (optional)
         config = None
-        if "config" in request.form:
-            try:
-                config = json.loads(request.form.get("config"))
-            except json.JSONDecodeError as e:
-                return create_error_response(
-                    ValidationError(f"Invalid JSON configuration: {e}"), 400
-                )
+        try:
+            config = parser.get_json_param("config", default=None, required=False)
+        except ValidationError as e:
+            return create_error_response(
+                ValidationError(f"Invalid JSON configuration: {e}"), 400
+            )
 
         # Get auto-detect setting
-        auto_detect = request.form.get("auto_detect", "true").lower() == "true"
+        auto_detect_str = parser.get_param("auto_detect", default="true")
+        auto_detect = auto_detect_str.lower() == "true" if isinstance(auto_detect_str, str) else bool(auto_detect_str)
 
         # Get max_rows parameter (optional)
         max_rows = None
-        if "max_rows" in request.form:
+        max_rows_str = parser.get_param("max_rows")
+        if max_rows_str:
             try:
-                max_rows = int(request.form.get("max_rows"))
+                max_rows = int(max_rows_str)
                 if max_rows <= 0:
                     return create_error_response(
                         ValidationError("max_rows must be a positive integer"), 400
@@ -1203,8 +1494,70 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
             f"Extracting data from sheets {sheet_names} with auto_detect={auto_detect}, max_rows={max_rows}"
         )
 
-        # Load Graph API credentials for range image extraction
-        graph_credentials = get_graph_api_credentials()
+        # Get configuration for SharePoint settings (needed for tenant_id)
+        # Use default config if none provided
+        if config is None:
+            config = config_manager.get_default_config() or {"global_settings": {"sharepoint": {}}}
+        
+        sharepoint_config = config.get("global_settings", {}).get("sharepoint", {})
+
+        # Load Graph API credentials with tenant_id from config
+        config_tenant_id = sharepoint_config.get("tenant_id")
+        graph_credentials = get_graph_api_credentials(config_tenant_id)
+
+        # Handle SharePoint file sources
+        if sharepoint_url or sharepoint_item_id:
+            if not graph_credentials:
+                return create_error_response(
+                    ValidationError(
+                        "Graph API credentials required for SharePoint file access"
+                    ),
+                    400,
+                )
+
+            # Minimal validation - URLs can auto-resolve site/drive info
+            if not sharepoint_config.get("enabled"):
+                return create_error_response(
+                    ValidationError(
+                        "SharePoint must be enabled in config.global_settings.sharepoint"
+                    ),
+                    400,
+                )
+
+            try:
+                # Initialize Graph API client with SharePoint config
+                from .graph_api_client import GraphAPIClient
+
+                graph_client = GraphAPIClient(
+                    client_id=graph_credentials["client_id"],
+                    client_secret=graph_credentials["client_secret"],
+                    tenant_id=graph_credentials["tenant_id"],
+                    sharepoint_config=sharepoint_config,
+                )
+
+                # Get item ID from URL if needed
+                if sharepoint_url:
+                    item_id = graph_client.get_sharepoint_item_id_from_url(
+                        sharepoint_url
+                    )
+                else:
+                    item_id = sharepoint_item_id
+
+                # Download file to memory
+                file_data = graph_client.download_file_to_memory(item_id)
+                excel_file = io.BytesIO(file_data)
+                excel_file.filename = "sharepoint_file.xlsx"
+
+                logger.info(
+                    f"Downloaded Excel file from SharePoint: {len(file_data)} bytes"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to download file from SharePoint: {e}")
+                return create_error_response(
+                    ValidationError(f"Failed to download file from SharePoint: {e}"),
+                    400,
+                )
 
         # Process Excel file (use existing memory/file handling logic)
         excel_processor = ExcelProcessor(excel_file, graph_credentials)
@@ -1410,7 +1763,7 @@ def diagnose_template() -> Tuple[Dict[str, Any], int]:
         # Save uploaded PowerPoint file
         pptx_filename = f"template_{uuid.uuid4().hex[:8]}.pptx"
         pptx_file_path = os.path.join(temp_dir, pptx_filename)
-        
+
         # Save the uploaded file
         powerpoint_file.save(pptx_file_path)
 
@@ -1467,55 +1820,27 @@ def diagnose_template() -> Tuple[Dict[str, Any], int]:
 @app.route("/api/v1/update", methods=["POST"])
 def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
     """Update Excel file with provided data - supports both multipart and JSON modes."""
+    
+    # CRITICAL REQUEST TRACKING
+    logger.info("🔵" * 50)
+    logger.info("🚀 /api/v1/update ENDPOINT HIT - REQUEST RECEIVED")
+    
+    # Use request handler for logging and detection
+    RequestPayloadDetector.log_request_info(request)
+    
+    logger.info("🔵" * 50)
     temp_manager = None
 
     try:
-        # Enhanced request logging for debugging
-        content_type = request.headers.get("Content-Type", "Not specified")
-        content_length = request.headers.get("Content-Length", "Not specified")
-        user_agent = request.headers.get("User-Agent", "Not specified")
+        # Detect payload mode using request handler
+        is_json_request, has_form_data, has_files = RequestPayloadDetector.detect_payload_mode(request)
+        
+        # Initialize payload parser
+        parser = PayloadParser(request, is_json_request)
 
         logger.info(
-            f"Update request received - Content-Type: {content_type}, Content-Length: {content_length}"
+            f"Update request mode - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}"
         )
-        logger.info(f"Update request User-Agent: {user_agent}")
-
-        # Enhanced dual mode detection - handle incorrect Content-Type from CRM systems
-        is_json_request = request.is_json
-        has_form_data = bool(request.form)
-        has_files = bool(request.files)
-
-        # Fallback JSON detection for CRM systems that send JSON with wrong Content-Type
-        if not is_json_request and request.data and not has_form_data and not has_files:
-            try:
-                # Try to parse raw request data as JSON
-                json.loads(request.data)
-                is_json_request = True
-                logger.info(
-                    f"Detected JSON payload despite Content-Type: {content_type}"
-                )
-            except json.JSONDecodeError:
-                logger.debug("Raw request data is not valid JSON")
-
-        logger.info(
-            f"Request analysis - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}"
-        )
-
-        # Log Content-Type detection issues
-        if is_json_request and not request.is_json:
-            logger.warning(
-                f"JSON payload detected with non-standard Content-Type: {content_type}"
-            )
-        elif content_type.startswith("text/plain") and request.data:
-            logger.info(
-                f"text/plain Content-Type with {len(request.data)} bytes of data"
-            )
-
-        # Log request size breakdown
-        if hasattr(request, "content_length") and request.content_length:
-            logger.info(
-                f"Actual request content length: {request.content_length} bytes ({request.content_length / (1024*1024):.2f} MB)"
-            )
 
         # Initialize variables for unified processing
         excel_file = None
@@ -1523,121 +1848,122 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
         update_data = None
         config = None
         include_update_log = False
-
-        if is_json_request:
-            # JSON MODE: Everything as base64 strings
-            logger.info("Processing request in JSON mode (base64 Excel file)")
-
+        
+        # Get SharePoint info from request (supports both naming conventions)
+        sharepoint_url, sharepoint_item_id = parser.get_sharepoint_info()
+        
+        # Get excel file from request
+        try:
+            excel_file = parser.get_file("excel_file", required=False)
+        except ValidationError as e:
+            # File is only required if no SharePoint reference
+            if not sharepoint_url and not sharepoint_item_id:
+                return create_error_response(
+                    ValidationError("Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"),
+                    400,
+                )
+        
+        # Validate request - either file upload OR SharePoint reference
+        if not sharepoint_url and not sharepoint_item_id and not excel_file:
+            return create_error_response(
+                ValidationError("Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"),
+                400,
+            )
+        
+        # Get update data, config, and include_update_log parameters
+        try:
+            update_data = parser.get_json_param("update_data", default={}, required=True)
+            config = parser.get_json_param("config", default={}, required=False)
+            
+            # For include_update_log, handle both boolean and string representations
+            if is_json_request:
+                include_update_log = parser.get_param("include_update_log", default=False)
+            else:
+                # In multipart mode, form values are strings
+                include_update_log_str = parser.get_param("include_update_log", default="false")
+                include_update_log = include_update_log_str.lower() in ("true", "1", "yes", "on")
+            
+        except ValidationError as e:
+            logger.error(f"Invalid parameters: {e}")
+            return create_error_response(e, 400)
+        
+        logger.info(
+            f"Update request - Update data fields: {list(update_data.keys()) if isinstance(update_data, dict) else 'not a dict'}"
+        )
+        logger.info(f"Update request - Include update log: {include_update_log}")
+        
+        # Get file data for saving
+        if excel_file:
+            excel_data = parser.get_file_data(excel_file)
+        
+        # Validate update data structure
+        if not isinstance(update_data, dict):
+            return create_error_response(
+                ValidationError("update_data must be a dictionary/object"), 400
+            )
+        
+        # Get configuration for SharePoint settings (needed for tenant_id)
+        sharepoint_config = config.get("global_settings", {}).get("sharepoint", {})
+        
+        # Load Graph API credentials with tenant_id from config
+        config_tenant_id = sharepoint_config.get("tenant_id")
+        graph_credentials = get_graph_api_credentials(config_tenant_id)
+        
+        # Handle SharePoint file source
+        if sharepoint_url or sharepoint_item_id:
+            if not graph_credentials:
+                return create_error_response(
+                    ValidationError(
+                        "Graph API credentials required for SharePoint file access"
+                    ),
+                    400,
+                )
+            
+            # Minimal validation - URLs can auto-resolve site/drive info
+            if not sharepoint_config.get("enabled"):
+                return create_error_response(
+                    ValidationError(
+                        "SharePoint must be enabled in config.global_settings.sharepoint"
+                    ),
+                    400,
+                )
+            
             try:
-                # Handle both standard JSON requests and CRM systems with wrong Content-Type
-                if request.is_json:
-                    json_data = request.get_json()
+                # Initialize Graph API client with SharePoint config
+                from .graph_api_client import GraphAPIClient
+                
+                graph_client = GraphAPIClient(
+                    client_id=graph_credentials["client_id"],
+                    client_secret=graph_credentials["client_secret"],
+                    tenant_id=graph_credentials["tenant_id"],
+                    sharepoint_config=sharepoint_config,
+                )
+                
+                # Download Excel file from SharePoint
+                if sharepoint_url:
+                    # Use direct download via Shares API for URLs
+                    excel_file_data = graph_client.download_file_from_sharing_url(
+                        sharepoint_url
+                    )
                 else:
-                    # Parse raw data for systems that send JSON with text/plain Content-Type
-                    json_data = json.loads(request.data)
-                    logger.info(
-                        "Parsed JSON from raw request data due to incorrect Content-Type"
+                    # Use item ID download for direct IDs
+                    excel_file_data = graph_client.download_file_to_memory(
+                        sharepoint_item_id
                     )
-
-                if not json_data:
-                    return create_error_response(
-                        ValidationError("JSON payload is required"), 400
-                    )
-
-                # Extract Excel file from base64
-                excel_file_b64 = json_data.get("excel_file")
-                if not excel_file_b64:
-                    return create_error_response(
-                        ValidationError("excel_file (base64) is required in JSON mode"),
-                        400,
-                    )
-
-                logger.info(f"Base64 Excel file size: {len(excel_file_b64)} characters")
-
-                # Decode base64 Excel file
-                try:
-                    excel_data = base64.b64decode(excel_file_b64)
-                    excel_file = io.BytesIO(excel_data)
-                    excel_file.filename = json_data.get(
-                        "filename", "uploaded_file.xlsx"
-                    )
-                    logger.info(f"Decoded Excel file size: {len(excel_data)} bytes")
-                except Exception as e:
-                    return create_error_response(
-                        ValidationError(f"Invalid base64 Excel file: {e}"), 400
-                    )
-
-                # Extract update data, config, and include_update_log directly from JSON
-                update_data = json_data.get("update_data", {})
-                config = json_data.get("config", {})
-                include_update_log = json_data.get("include_update_log", False)
-
+                
+                excel_file = io.BytesIO(excel_file_data)
+                excel_file.filename = "sharepoint_excel.xlsx"
+                excel_data = excel_file_data  # Store for later file saving
+                
                 logger.info(
-                    f"JSON mode - Update data fields: {list(update_data.keys()) if isinstance(update_data, dict) else 'not a dict'}"
+                    f"Downloaded Excel file from SharePoint: {len(excel_file_data)} bytes"
                 )
-                logger.info(f"JSON mode - Include update log: {include_update_log}")
-                logger.info("JSON mode processing completed successfully")
-
-            except json.JSONDecodeError as e:
+                
+            except Exception as e:
+                logger.error(f"Failed to download file from SharePoint: {e}")
                 return create_error_response(
-                    ValidationError(f"Invalid JSON format: {e}"), 400
-                )
-
-        else:
-            # MULTIPART MODE: Binary file + JSON form fields
-            logger.info("Processing request in multipart mode (binary Excel file)")
-
-            # Log form fields for debugging
-            if has_form_data:
-                form_fields = list(request.form.keys())
-                logger.info(f"Form fields present: {form_fields}")
-                for field in form_fields:
-                    field_size = len(request.form.get(field, ""))
-                    logger.info(f"Form field '{field}' size: {field_size} bytes")
-
-            # Log file information
-            if has_files:
-                file_info = []
-                for file_key in request.files.keys():
-                    file_obj = request.files[file_key]
-                    file_info.append(f"{file_key}: {file_obj.filename}")
-                logger.info(f"Files in request: {file_info}")
-
-            # Validate Excel file presence
-            if "excel_file" not in request.files:
-                logger.error("Excel file missing from multipart request")
-                return create_error_response(
-                    ValidationError("Excel file is required"), 400
-                )
-
-            excel_file = request.files["excel_file"]
-
-            # Get update data, config, and include_update_log from form fields
-            update_data_str = request.form.get("update_data", "{}")
-            config_str = request.form.get("config", "{}")
-            include_update_log_str = request.form.get("include_update_log", "false")
-
-            logger.info(f"Update data string size: {len(update_data_str)} bytes")
-            logger.info(f"Config string size: {len(config_str)} bytes")
-            logger.info(f"Include update log: {include_update_log_str}")
-
-            # Parse JSON from form fields
-            try:
-                update_data = json.loads(update_data_str)
-                config = json.loads(config_str)
-                include_update_log = include_update_log_str.lower() in (
-                    "true",
-                    "1",
-                    "yes",
-                    "on",
-                )
-                logger.info("Successfully parsed JSON data from form fields")
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON parsing failed: {e}")
-                logger.error(f"Update data preview: {update_data_str[:200]}...")
-                logger.error(f"Config preview: {config_str[:200]}...")
-                return create_error_response(
-                    ValidationError(f"Invalid JSON format: {e}"), 400
+                    ValidationError(f"Failed to download file from SharePoint: {e}"),
+                    400,
                 )
 
         # UNIFIED PROCESSING PATH: Both modes now have same data structure
@@ -1647,11 +1973,7 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
         # - config: dict with configuration
 
         # Validate file
-        if (
-            not excel_file
-            or not hasattr(excel_file, "filename")
-            or not excel_file.filename
-        ):
+        if not excel_file:
             return create_error_response(
                 ValidationError("No file selected or invalid file"), 400
             )
@@ -1665,19 +1987,14 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
         temp_manager = TempFileManager(app_config["temp_file_cleanup"])
         temp_dir = temp_manager.create_temp_directory()
 
-        # Save Excel file to temp directory (works for both modes)
+        # Save Excel file to temp directory (works for all modes)
         excel_filename = f"input_{uuid.uuid4().hex[:8]}.xlsx"
         excel_path = os.path.join(temp_dir, excel_filename)
 
-        if is_json_request:
-            # For JSON mode: write decoded bytes to file
-            with open(excel_path, "wb") as f:
-                f.write(excel_data)
-            logger.info(f"Saved base64-decoded Excel file to: {excel_path}")
-        else:
-            # For multipart mode: save uploaded file
-            excel_file.save(excel_path)
-            logger.info(f"Saved uploaded Excel file to: {excel_path}")
+        # Write data to file
+        with open(excel_path, "wb") as f:
+            f.write(excel_data)
+        logger.info(f"Saved Excel file to: {excel_path}")
 
         # Update Excel file (same process for both modes)
         updater = ExcelUpdater(excel_path)
@@ -1820,7 +2137,9 @@ def excel_pptx_merger(request):
     logger.info(f"🌐 Cloud Function Request: {request.method} {request.path}")
     logger.info(f"Content-Type: {request.headers.get('Content-Type', 'Not specified')}")
     logger.info(f"User-Agent: {request.headers.get('User-Agent', 'Not specified')}")
-    logger.info(f"Content-Length: {request.headers.get('Content-Length', 'Not specified')}")
+    logger.info(
+        f"Content-Length: {request.headers.get('Content-Length', 'Not specified')}"
+    )
     logger.info(f"Has request.files: {bool(request.files)}")
     logger.info(f"Has request.data: {bool(request.data)}")
     logger.info(f"Has request.form: {bool(request.form)}")
@@ -1846,8 +2165,12 @@ def excel_pptx_merger(request):
 
             # Check if files were uploaded for other endpoints (preview, diagnose, etc.)
             if not request.files:
-                logger.warning("❌ No files found in request for endpoint requiring file uploads")
-                logger.warning("This is normal for JSON mode endpoints that bypass this check")
+                logger.warning(
+                    "❌ No files found in request for endpoint requiring file uploads"
+                )
+                logger.warning(
+                    "This is normal for JSON mode endpoints that bypass this check"
+                )
                 # Cloud Functions might receive files differently
                 return (
                     jsonify(

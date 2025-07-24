@@ -12,6 +12,7 @@ class RangeImageLogger:
         """Initialize the range image logger."""
         self.logger = logging.getLogger(name)
         self.logger.setLevel(level)
+        self.debug_enabled = False
 
         # Remove existing handlers to avoid duplicates
         for handler in self.logger.handlers[:]:
@@ -33,9 +34,18 @@ class RangeImageLogger:
         self.logger.addHandler(console_handler)
         self.logger.propagate = False  # Prevent propagation to root logger
 
+    def enable_debug(self):
+        """Enable debug logging for range extraction."""
+        self.debug_enabled = True
+
+    def disable_debug(self):
+        """Disable debug logging for range extraction."""
+        self.debug_enabled = False
+
     def info(self, message: str, **kwargs) -> None:
         """Log info message with enhanced visibility."""
-        self.logger.info(message, **kwargs)
+        if self.debug_enabled:
+            self.logger.info(message, **kwargs)
 
     def warning(self, message: str, **kwargs) -> None:
         """Log warning message with enhanced visibility."""

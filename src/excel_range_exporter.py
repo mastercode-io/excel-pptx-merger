@@ -1,14 +1,24 @@
-"""Excel range to image exporter using Microsoft Graph API."""
+"""Excel range to image exporter using local table recreation."""
 
 import logging
 import os
 import tempfile
 import time
+import io
+import base64
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-from .graph_api_client import GraphAPIClient, GraphAPIError
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.table import Table
+import numpy as np
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter, column_index_from_string
+from openpyxl.styles import PatternFill
+from PIL import Image, ImageDraw, ImageFont
+
 from .temp_file_manager import TempFileManager
 from .utils.exceptions import ExcelProcessingError, ValidationError
 
@@ -45,17 +55,22 @@ class RangeImageResult:
 
 
 class ExcelRangeExporter:
-    """Exports Excel ranges as images using Microsoft Graph API."""
+    """Exports Excel ranges as images using local table recreation."""
 
-    def __init__(self, client_id: str, client_secret: str, tenant_id: str):
-        """Initialize with Azure app credentials."""
-        self.graph_client = GraphAPIClient(client_id, client_secret, tenant_id)
+    def __init__(self):
+        """Initialize the Excel range exporter."""
         self.temp_manager = TempFileManager()
+        self.debug_directory = None
+
+    def set_debug_directory(self, debug_dir: str) -> None:
+        """Set debug directory for saving range images in development mode."""
+        self.debug_directory = debug_dir
+        logger.info(f"Debug directory set for range images: {debug_dir}")
 
     def export_ranges(
         self, workbook_path: str, range_configs: List[RangeImageConfig]
     ) -> List[RangeImageResult]:
-        """Export multiple ranges from an Excel workbook."""
+        """Export multiple ranges from an Excel workbook using local table recreation."""
         if not os.path.exists(workbook_path):
             raise ExcelProcessingError(f"Workbook not found: {workbook_path}")
 
@@ -64,42 +79,31 @@ class ExcelRangeExporter:
             return []
 
         results = []
-        item_id = None
 
         try:
-            # Upload workbook to OneDrive
-            logger.info(f"Uploading workbook to OneDrive: {workbook_path}")
-            item_id = self.graph_client.upload_workbook_to_onedrive(workbook_path)
-
+            # Load workbook locally
+            logger.info(f"Loading Excel workbook: {workbook_path}")
+            wb = load_workbook(workbook_path, data_only=False)
+            
             # Get available worksheets for validation
-            worksheets = self.graph_client.get_worksheet_names(item_id)
+            worksheets = wb.sheetnames
             logger.info(f"Available worksheets: {worksheets}")
 
             # Process each range configuration
             for config in range_configs:
-                result = self._export_single_range(item_id, config, worksheets)
+                result = self._export_single_range_local(wb, config, worksheets)
                 results.append(result)
 
-        except GraphAPIError as e:
-            logger.error(f"Graph API error during range export: {e}")
-            raise ExcelProcessingError(f"Failed to export ranges: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error during range export: {e}")
-            raise ExcelProcessingError(f"Unexpected error: {e}")
-        finally:
-            # Cleanup temporary file from OneDrive
-            if item_id:
-                try:
-                    self.graph_client.cleanup_temp_file(item_id)
-                except Exception as e:
-                    logger.warning(f"Failed to cleanup OneDrive file: {e}")
+            logger.error(f"Error during range export: {e}")
+            raise ExcelProcessingError(f"Failed to export ranges: {e}")
 
         return results
 
-    def _export_single_range(
-        self, item_id: str, config: RangeImageConfig, available_worksheets: List[str]
+    def _export_single_range_local(
+        self, workbook, config: RangeImageConfig, available_worksheets: List[str]
     ) -> RangeImageResult:
-        """Export a single range as image."""
+        """Export a single range as image using local table recreation."""
         try:
             # Validate sheet exists
             if config.sheet_name not in available_worksheets:
@@ -116,39 +120,17 @@ class ExcelRangeExporter:
                     error_message=error_msg,
                 )
 
-            # Validate range exists and has data
-            if not self.graph_client.validate_range(
-                item_id, config.sheet_name, config.range
-            ):
-                error_msg = f"Range '{config.range}' in sheet '{config.sheet_name}' is invalid or empty"
-                logger.warning(error_msg)
-                return RangeImageResult(
-                    field_name=config.field_name,
-                    image_path="",
-                    image_data=b"",
-                    width=0,
-                    height=0,
-                    range_dimensions=(0, 0),
-                    success=False,
-                    error_message=error_msg,
-                )
-
-            # Get range dimensions
-            range_dimensions = self.graph_client.get_range_dimensions(
-                item_id, config.sheet_name, config.range
-            )
-
-            # Render range as image
+            # Get worksheet
+            worksheet = workbook[config.sheet_name]
+            
+            # Parse range
+            range_cells = worksheet[config.range]
+            
+            # Create table image using matplotlib
             logger.info(
-                f"Rendering range {config.range} from sheet '{config.sheet_name}' as image"
+                f"Creating table image for range {config.range} from sheet '{config.sheet_name}'"
             )
-            image_data = self.graph_client.render_range_as_image(
-                item_id=item_id,
-                sheet_name=config.sheet_name,
-                range_str=config.range,
-                width=config.width,
-                height=config.height,
-            )
+            image_data = self._create_table_image(range_cells, config)
 
             # Save image to temporary file
             image_path = self._save_image_to_temp_file(
@@ -157,6 +139,14 @@ class ExcelRangeExporter:
 
             # Get actual image dimensions
             actual_width, actual_height = self._get_image_dimensions(image_data)
+
+            # Calculate range dimensions
+            if hasattr(range_cells, '__iter__') and hasattr(range_cells[0], '__iter__'):
+                rows = len(range_cells)
+                cols = len(range_cells[0]) if rows > 0 else 0
+                range_dimensions = (rows, cols)
+            else:
+                range_dimensions = (1, 1)
 
             logger.info(f"Successfully exported range {config.range} to {image_path}")
             return RangeImageResult(
@@ -169,19 +159,6 @@ class ExcelRangeExporter:
                 success=True,
             )
 
-        except GraphAPIError as e:
-            error_msg = f"Failed to export range {config.range}: {e}"
-            logger.error(error_msg)
-            return RangeImageResult(
-                field_name=config.field_name,
-                image_path="",
-                image_data=b"",
-                width=0,
-                height=0,
-                range_dimensions=(0, 0),
-                success=False,
-                error_message=error_msg,
-            )
         except Exception as e:
             error_msg = f"Unexpected error exporting range {config.range}: {e}"
             logger.error(error_msg)
@@ -196,6 +173,132 @@ class ExcelRangeExporter:
                 error_message=error_msg,
             )
 
+    def _create_table_image(self, range_cells, config: RangeImageConfig) -> bytes:
+        """Create a table image from Excel range cells using matplotlib."""
+        
+        # Extract data and formatting
+        table_data = []
+        cell_colors = []
+        text_colors = []
+        font_weights = []
+        
+        # Handle both single cell and multi-cell ranges
+        if not hasattr(range_cells, '__iter__') or not hasattr(range_cells[0], '__iter__'):
+            # Single cell
+            range_cells = [[range_cells]]
+        
+        for row in range_cells:
+            row_data = []
+            row_colors = []
+            row_text_colors = []
+            row_weights = []
+            
+            for cell in row:
+                # Get cell value
+                value = cell.value
+                if value is None:
+                    value = ""
+                elif isinstance(value, (int, float)):
+                    if cell.number_format and '£' in cell.number_format:
+                        value = f"£{value:,.2f}" if isinstance(value, float) else f"£{value:,}"
+                    else:
+                        value = str(value)
+                else:
+                    value = str(value)
+                
+                row_data.append(value)
+                
+                # Get background color
+                if cell.fill and cell.fill.start_color and cell.fill.start_color.rgb:
+                    try:
+                        hex_color = cell.fill.start_color.rgb
+                        if len(hex_color) == 8:  # ARGB format
+                            hex_color = hex_color[2:]  # Remove alpha
+                        rgb = tuple(int(hex_color[i:i+2], 16)/255.0 for i in (0, 2, 4))
+                        row_colors.append(rgb)
+                    except:
+                        row_colors.append('white')
+                else:
+                    row_colors.append('white')
+                
+                # Get text color
+                if cell.font and cell.font.color and cell.font.color.rgb:
+                    try:
+                        hex_color = cell.font.color.rgb
+                        if len(hex_color) == 8:  # ARGB format
+                            hex_color = hex_color[2:]  # Remove alpha
+                        rgb = tuple(int(hex_color[i:i+2], 16)/255.0 for i in (0, 2, 4))
+                        row_text_colors.append(rgb)
+                    except:
+                        row_text_colors.append('black')
+                else:
+                    row_text_colors.append('black')
+                
+                # Get font weight
+                if cell.font and cell.font.bold:
+                    row_weights.append('bold')
+                else:
+                    row_weights.append('normal')
+            
+            table_data.append(row_data)
+            cell_colors.append(row_colors)
+            text_colors.append(row_text_colors)
+            font_weights.append(row_weights)
+        
+        # Create matplotlib figure
+        plt.style.use('default')
+        fig, ax = plt.subplots(figsize=(16, max(6, len(table_data) * 0.5)))
+        ax.axis('tight')
+        ax.axis('off')
+        
+        # Create table
+        table = ax.table(
+            cellText=table_data,
+            cellLoc='center',
+            loc='center',
+            colWidths=[0.12] * len(table_data[0]) if table_data else [0.12]
+        )
+        
+        # Style the table
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1, 2)  # Make cells taller
+        
+        # Apply formatting
+        for (i, j), cell in table.get_celld().items():
+            if i < len(cell_colors) and j < len(cell_colors[i]):
+                # Set background color
+                cell.set_facecolor(cell_colors[i][j])
+                
+                # Set text color and weight
+                cell.set_text_props(
+                    color=text_colors[i][j],
+                    weight=font_weights[i][j]
+                )
+                
+                # Add border
+                cell.set_edgecolor('lightgray')
+                cell.set_linewidth(0.5)
+        
+        # Adjust layout
+        plt.tight_layout()
+        plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+        
+        # Save to bytes
+        img_buffer = io.BytesIO()
+        plt.savefig(
+            img_buffer, 
+            format='png', 
+            dpi=config.dpi or 150,
+            bbox_inches='tight',
+            facecolor='white',
+            edgecolor='none'
+        )
+        plt.close()  # Important: close the figure to free memory
+        
+        img_buffer.seek(0)
+        return img_buffer.getvalue()
+
     def _save_image_to_temp_file(
         self, image_data: bytes, field_name: str, output_format: str
     ) -> str:
@@ -204,10 +307,27 @@ class ExcelRangeExporter:
         timestamp = int(time.time())
         filename = f"range_image_{field_name}_{timestamp}.{output_format.lower()}"
 
-        # Use temp file manager for consistent handling
-        temp_path = self.temp_manager.create_temp_file(
-            suffix=f".{output_format.lower()}"
-        )
+        # If debug directory is set, save there instead of temp directory
+        if self.debug_directory:
+            try:
+                os.makedirs(self.debug_directory, exist_ok=True)
+                temp_path = os.path.join(self.debug_directory, filename)
+
+                with open(temp_path, "wb") as f:
+                    f.write(image_data)
+
+                logger.info(f"Saved range image to debug directory: {temp_path}")
+                return temp_path
+            except Exception as e:
+                logger.warning(
+                    f"Failed to save to debug directory, falling back to temp: {e}"
+                )
+                # Fall back to temp file if debug save fails
+
+        # Use basic temp file for now (can be improved later)
+        import tempfile
+        temp_fd, temp_path = tempfile.mkstemp(suffix=f".{output_format.lower()}")
+        os.close(temp_fd)  # Close the file descriptor since we'll use the path
 
         try:
             with open(temp_path, "wb") as f:
@@ -314,7 +434,7 @@ def validate_range_configs(configs: List[RangeImageConfig]) -> List[str]:
                 field_names.add(config.field_name)
 
             # Validate individual config (this will raise ValidationError if invalid)
-            exporter = ExcelRangeExporter("", "", "")  # Dummy exporter for validation
+            exporter = ExcelRangeExporter()  # Dummy exporter for validation
             exporter.validate_config(config)
 
         except ValidationError as e:

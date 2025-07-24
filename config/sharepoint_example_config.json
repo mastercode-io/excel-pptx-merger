@@ -1,0 +1,92 @@
+{
+  "version": "1.1",
+  "sheet_configs": {
+    "Data": {
+      "subtables": [
+        {
+          "name": "client_info",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Client",
+            "column": "A",
+            "search_range": "A1:A3"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 6,
+            "column_mappings": {
+              "Client": "client_name",
+              "Project": "project_name",
+              "Status": "status"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "range_images": [
+    {
+      "field_name": "summary_table",
+      "sheet_name": "Data",
+      "range": "A1:E15",
+      "include_headers": true,
+      "output_format": "png",
+      "dpi": 150
+    },
+    {
+      "field_name": "chart_visualization",
+      "sheet_name": "Charts",
+      "range": "B5:L25",
+      "output_format": "png",
+      "dpi": 200,
+      "width": 800,
+      "height": 600
+    }
+  ],
+  "global_settings": {
+    "default_extraction_type": "table",
+    "normalize_keys": true,
+    "sharepoint": {
+      "enabled": true,
+      "tenant_id": "your-tenant-id",
+      "site_id": "your-sharepoint-site-id",
+      "drive_id": "your-document-library-drive-id",
+      "temp_folder_path": "/Temp/ExcelProcessing"
+    },
+    "range_images": {
+      "enabled": true,
+      "require_sharepoint": true,
+      "default_dpi": 150,
+      "default_format": "png",
+      "max_range_cells": 10000,
+      "temp_cleanup": true
+    },
+    "temp_file_cleanup": {
+      "enabled": true,
+      "delay_seconds": 300,
+      "keep_on_error": true,
+      "development_mode": false
+    },
+    "image_extraction": {
+      "enabled": true,
+      "formats": ["png", "jpg", "jpeg", "gif"],
+      "max_size_mb": 10,
+      "preserve_aspect_ratio": true
+    },
+    "validation": {
+      "strict_mode": false,
+      "allow_empty_values": true,
+      "required_fields": ["client_name"],
+      "data_type_validation": false
+    },
+    "output_formatting": {
+      "date_format": "%Y-%m-%d",
+      "currency_format": "$%.2f",
+      "number_format": "%.2f",
+      "text_encoding": "utf-8"
+    }
+  }
+}

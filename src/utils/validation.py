@@ -239,6 +239,7 @@ def validate_merge_fields(template_text: str) -> List[str]:
             if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*$", field):
                 # Log warning for invalid field but continue processing
                 import logging
+
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Skipping invalid merge field format: {{{{{field}}}}}")
                 continue

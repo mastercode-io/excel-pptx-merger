@@ -974,9 +974,27 @@ class ExcelUpdater:
                 output_dir, f"updated_{base_name}_{timestamp}.xlsx"
             )
 
-            # Save workbook
-            self.workbook.save(output_path)
-            return output_path
+            # Save workbook with improved error handling
+            try:
+                self.workbook.save(output_path)
+                return output_path
+            except Exception as e:
+                # Check for I/O operation on closed file error
+                if "I/O operation on closed file" in str(e):
+                    self._log_error(f"I/O operation on closed file error: {e}")
+                    self._log_error("This suggests the workbook has corrupted file handles")
+                    # Try to reload and re-save the workbook
+                    try:
+                        self._log_info("Attempting workbook reload and re-save...")
+                        fresh_workbook = load_workbook(self.file_path)
+                        fresh_workbook.save(output_path)
+                        self._log_info("Successfully saved using fresh workbook")
+                        return output_path
+                    except Exception as reload_error:
+                        self._log_error(f"Workbook reload also failed: {reload_error}")
+                        raise e
+                else:
+                    raise e
         finally:
             # Clean up temporary image files after workbook save
             self._cleanup_temp_files()

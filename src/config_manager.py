@@ -518,6 +518,14 @@ class ConfigManager:
                             "Position matching confidence threshold must be between 0.0 and 1.0"
                         )
 
+        # Validate SharePoint configuration
+        if "sharepoint" in settings:
+            self._validate_sharepoint_settings(settings["sharepoint"])
+
+        # Validate range images configuration
+        if "range_images" in settings:
+            self._validate_range_images_settings(settings["range_images"])
+
         if "powerpoint_processing" in settings:
             pptx_config = settings["powerpoint_processing"]
 
@@ -540,6 +548,67 @@ class ConfigManager:
                         raise ConfigurationError(
                             f"Invalid regex pattern for image placeholder: {pattern} - {e}"
                         )
+
+    def _validate_sharepoint_settings(self, sharepoint_config: Dict[str, Any]) -> None:
+        """Validate SharePoint configuration."""
+        if sharepoint_config.get("enabled"):
+            # Check tenant_id - can be provided in config or environment
+            tenant_id = sharepoint_config.get("tenant_id")
+            if tenant_id is not None and not isinstance(tenant_id, str):
+                raise ConfigurationError("SharePoint tenant_id must be a string")
+
+            # site_id and drive_id are optional if using URLs for auto-resolution
+            site_id = sharepoint_config.get("site_id")
+            if site_id is not None and (
+                not isinstance(site_id, str) or not site_id.strip()
+            ):
+                raise ConfigurationError(
+                    "SharePoint site_id must be a non-empty string if provided"
+                )
+
+            # Validate temp folder path format
+            temp_folder = sharepoint_config.get(
+                "temp_folder_path", "/Temp/ExcelProcessing"
+            )
+            if not isinstance(temp_folder, str):
+                raise ConfigurationError("SharePoint temp_folder_path must be a string")
+
+            # Validate drive_id if provided
+            drive_id = sharepoint_config.get("drive_id")
+            if drive_id is not None and not isinstance(drive_id, str):
+                raise ConfigurationError("SharePoint drive_id must be a string")
+
+    def _validate_range_images_settings(
+        self, range_images_config: Dict[str, Any]
+    ) -> None:
+        """Validate range images configuration."""
+        # Validate default DPI
+        default_dpi = range_images_config.get("default_dpi", 150)
+        if not isinstance(default_dpi, int) or default_dpi < 72 or default_dpi > 600:
+            raise ConfigurationError(
+                "Range images default_dpi must be an integer between 72 and 600"
+            )
+
+        # Validate default format
+        default_format = range_images_config.get("default_format", "png")
+        valid_formats = ["png", "jpg", "jpeg"]
+        if default_format.lower() not in valid_formats:
+            raise ConfigurationError(
+                f"Range images default_format must be one of: {valid_formats}"
+            )
+
+        # Validate max range cells
+        max_range_cells = range_images_config.get("max_range_cells", 10000)
+        if not isinstance(max_range_cells, int) or max_range_cells <= 0:
+            raise ConfigurationError(
+                "Range images max_range_cells must be a positive integer"
+            )
+
+        # If require_sharepoint is True, ensure sharepoint is enabled
+        if range_images_config.get("require_sharepoint", True):
+            logger.info(
+                "Range images require SharePoint - will validate SharePoint config when used"
+            )
 
     def clear_cache(self) -> None:
         """Clear configuration cache."""

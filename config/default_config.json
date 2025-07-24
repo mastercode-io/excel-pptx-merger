@@ -128,6 +128,13 @@
   "global_settings": {
     "default_extraction_type": "table",
     "normalize_keys": true,
+    "sharepoint": {
+      "enabled": false,
+      "tenant_id": "",
+      "site_id": "",
+      "drive_id": "",
+      "temp_folder_path": "/Temp/ExcelProcessing"
+    },
     "temp_file_cleanup": {
       "enabled": true,
       "delay_seconds": 300,
@@ -139,6 +146,15 @@
       "formats": ["png", "jpg", "jpeg", "gif"],
       "max_size_mb": 10,
       "preserve_aspect_ratio": true
+    },
+    "range_images": {
+      "enabled": false,
+      "require_sharepoint": true,
+      "default_dpi": 150,
+      "default_format": "png",
+      "max_range_cells": 10000,
+      "temp_cleanup": true,
+      "debug_logging": false
     },
     "validation": {
       "strict_mode": false,
@@ -152,5 +168,16 @@
       "number_format": "%.2f",
       "text_encoding": "utf-8"
     }
-  }
+  },
+  "range_images": [
+    {
+      "field_name": "audit_table",
+      "sheet_name": "TMH USE AUDIT", 
+      "range": "B1:P21",
+      "include_headers": true,
+      "output_format": "png",
+      "dpi": 150,
+      "fit_to_content": true
+    }
+  ]
 }
