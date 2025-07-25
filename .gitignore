@@ -166,3 +166,6 @@ logs/
 .env.production
 .env.testing
 config/graph_api.env
+
+# Security: Scripts containing sensitive credentials
+scripts/setup_secrets.sh

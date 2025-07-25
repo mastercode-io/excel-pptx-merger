@@ -42,6 +42,8 @@ from .utils.validation import validate_api_request
 from .utils.file_utils import save_uploaded_file, get_file_info
 from .utils.range_image_logger import setup_range_image_debug_mode
 from .utils.request_handler import RequestPayloadDetector, PayloadParser
+from .job_queue import job_queue, JobStatus
+from .job_handlers import handler_registry
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -232,6 +234,172 @@ def health() -> Tuple[Dict[str, Any], int]:
         return health_info, 200
 
     except Exception as e:
+        return create_error_response(e, 500)
+
+
+# Job Queue Endpoints
+@app.route("/api/v1/jobs/start", methods=["POST"])
+def start_job():
+    """Start a new async job for any supported endpoint."""
+    try:
+        # Clean up expired jobs first
+        job_queue.cleanup_expired_jobs()
+        
+        # Parse request data
+        if request.is_json:
+            data = request.get_json()
+        else:
+            return create_error_response(
+                ValidationError("Job requests must be JSON"), 400
+            )
+        
+        # Validate required fields
+        if not data or 'endpoint' not in data or 'payload' not in data:
+            return create_error_response(
+                ValidationError("Both 'endpoint' and 'payload' are required"), 400
+            )
+        
+        endpoint = data['endpoint']
+        payload = data['payload']
+        
+        # Validate endpoint is supported
+        if not handler_registry.is_supported(endpoint):
+            return create_error_response(
+                ValidationError(f"Endpoint '{endpoint}' is not supported for async processing. Supported: {handler_registry.get_supported_endpoints()}"), 400
+            )
+        
+        # Get client IP for rate limiting
+        client_ip = request.environ.get('REMOTE_ADDR', '127.0.0.1')
+        
+        # Create job
+        job_id = job_queue.create_job(endpoint, payload, client_ip)
+        
+        # Start processing in background thread
+        import threading
+        def process_job_async():
+            handler_func = handler_registry.get_handler(endpoint)
+            job_queue.process_job(job_id, handler_func)
+        
+        thread = threading.Thread(target=process_job_async, daemon=True)
+        thread.start()
+        
+        logger.info(f"Started async job {job_id} for endpoint {endpoint}")
+        
+        return jsonify({
+            "success": True,
+            "jobId": job_id,
+            "status": "started",
+            "endpoint": endpoint,
+            "estimatedTime": "30-60 seconds"
+        }), 200
+        
+    except ValueError as e:
+        return create_error_response(ValidationError(str(e)), 400)
+    except Exception as e:
+        logger.exception("Error starting job")
+        return create_error_response(e, 500)
+
+
+@app.route("/api/v1/jobs/<job_id>/status", methods=["GET"])
+def get_job_status(job_id: str):
+    """Get status of a running job."""
+    try:
+        # Clean up expired jobs
+        job_queue.cleanup_expired_jobs()
+        
+        # Get job status
+        status = job_queue.get_job_status(job_id)
+        if not status:
+            return create_error_response(
+                ValidationError(f"Job '{job_id}' not found"), 404
+            )
+        
+        return jsonify(status), 200
+        
+    except Exception as e:
+        logger.exception(f"Error getting job status for {job_id}")
+        return create_error_response(e, 500)
+
+
+@app.route("/api/v1/jobs/<job_id>/result", methods=["GET"])
+def get_job_result(job_id: str):
+    """Get result of a completed job and clean up storage."""
+    try:
+        # Clean up expired jobs
+        job_queue.cleanup_expired_jobs()
+        
+        # Get job result (with cleanup)
+        result = job_queue.get_job_result(job_id, cleanup=True)
+        if not result:
+            return create_error_response(
+                ValidationError(f"Job '{job_id}' not found"), 404
+            )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+        
+    except Exception as e:
+        logger.exception(f"Error getting job result for {job_id}")
+        return create_error_response(e, 500)
+
+
+@app.route("/api/v1/jobs", methods=["GET"])
+def list_jobs():
+    """List all jobs (optional endpoint for debugging)."""
+    try:
+        # Clean up expired jobs
+        job_queue.cleanup_expired_jobs()
+        
+        # Get status filter from query params
+        status_filter = request.args.get('status')
+        
+        # List jobs
+        jobs_list = job_queue.list_jobs(status_filter)
+        return jsonify(jobs_list), 200
+        
+    except Exception as e:
+        logger.exception("Error listing jobs")
+        return create_error_response(e, 500)
+
+
+@app.route("/api/v1/jobs/<job_id>", methods=["DELETE"])
+def delete_job(job_id: str):
+    """Cancel/delete a job (optional endpoint)."""
+    try:
+        # Delete job
+        deleted = job_queue.delete_job(job_id)
+        if not deleted:
+            return create_error_response(
+                ValidationError(f"Job '{job_id}' not found"), 404
+            )
+        
+        return jsonify({
+            "success": True,
+            "message": f"Job '{job_id}' deleted successfully"
+        }), 200
+        
+    except Exception as e:
+        logger.exception(f"Error deleting job {job_id}")
+        return create_error_response(e, 500)
+
+
+@app.route("/api/v1/jobs/stats", methods=["GET"])
+def get_job_stats():
+    """Get job queue statistics (optional endpoint for monitoring)."""
+    try:
+        # Clean up expired jobs
+        job_queue.cleanup_expired_jobs()
+        
+        stats = job_queue.get_stats()
+        return jsonify({
+            "success": True,
+            "stats": stats
+        }), 200
+        
+    except Exception as e:
+        logger.exception("Error getting job stats")
         return create_error_response(e, 500)
 
 
@@ -671,7 +839,46 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             "sharepoint", {}
         )
 
-        # Load Graph API credentials with tenant_id from config
+        # Handle SharePoint file sources using centralized handler
+        try:
+            from .utils.sharepoint_file_handler import SharePointFileHandler
+            
+            # Download Excel file from SharePoint if needed
+            if sharepoint_excel_url or sharepoint_excel_id:
+                sp_handler = SharePointFileHandler(sharepoint_config)
+                sharepoint_excel_file = sp_handler.download_file(
+                    sharepoint_url=sharepoint_excel_url,
+                    sharepoint_item_id=sharepoint_excel_id,
+                    default_filename="sharepoint_excel.xlsx"
+                )
+                excel_file = sharepoint_excel_file
+                if is_json_request:
+                    sharepoint_excel_file.seek(0)
+                    excel_data = sharepoint_excel_file.read()  # Store for later file saving
+                logger.info("✅ Using SharePoint Excel file for merge")
+
+            # Download PowerPoint file from SharePoint if needed
+            if sharepoint_pptx_url or sharepoint_pptx_id:
+                sp_handler = SharePointFileHandler(sharepoint_config)
+                sharepoint_pptx_file = sp_handler.download_file(
+                    sharepoint_url=sharepoint_pptx_url,
+                    sharepoint_item_id=sharepoint_pptx_id,
+                    default_filename="sharepoint_template.pptx"
+                )
+                pptx_file = sharepoint_pptx_file
+                if is_json_request:
+                    sharepoint_pptx_file.seek(0)
+                    pptx_data = sharepoint_pptx_file.read()  # Store for later file saving
+                logger.info("✅ Using SharePoint PowerPoint file for merge")
+
+        except ValidationError as e:
+            return create_error_response(e, 400)
+        except Exception as e:
+            return create_error_response(
+                ValidationError(f"SharePoint file access failed: {e}"), 400
+            )
+
+        # Load Graph API credentials for range image extraction
         config_tenant_id = sharepoint_config.get("tenant_id")
         graph_credentials = get_graph_api_credentials(config_tenant_id)
 
@@ -684,92 +891,6 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
             logger.info(
                 "Graph API credentials not found - range image extraction disabled"
             )
-
-        # Handle SharePoint file sources
-        if (
-            sharepoint_excel_url
-            or sharepoint_excel_id
-            or sharepoint_pptx_url
-            or sharepoint_pptx_id
-        ):
-            if not graph_credentials:
-                return create_error_response(
-                    ValidationError(
-                        "Graph API credentials required for SharePoint file access"
-                    ),
-                    400,
-                )
-
-            # Minimal validation - URLs can auto-resolve site/drive info
-            if not sharepoint_config.get("enabled"):
-                return create_error_response(
-                    ValidationError(
-                        "SharePoint must be enabled in config.global_settings.sharepoint"
-                    ),
-                    400,
-                )
-
-            try:
-                # Initialize Graph API client with SharePoint config
-                from .graph_api_client import GraphAPIClient
-
-                graph_client = GraphAPIClient(
-                    client_id=graph_credentials["client_id"],
-                    client_secret=graph_credentials["client_secret"],
-                    tenant_id=graph_credentials["tenant_id"],
-                    sharepoint_config=sharepoint_config,
-                )
-
-                # Download Excel file from SharePoint if needed
-                if sharepoint_excel_url or sharepoint_excel_id:
-                    if sharepoint_excel_url:
-                        # Use direct download via Shares API for URLs
-                        excel_file_data = graph_client.download_file_from_sharing_url(
-                            sharepoint_excel_url
-                        )
-                    else:
-                        # Use item ID download for direct IDs
-                        excel_file_data = graph_client.download_file_to_memory(
-                            sharepoint_excel_id
-                        )
-
-                    excel_file = io.BytesIO(excel_file_data)
-                    excel_file.filename = "sharepoint_excel.xlsx"
-                    if is_json_request:
-                        excel_data = excel_file_data  # Store for later file saving
-
-                    logger.info(
-                        f"Downloaded Excel file from SharePoint: {len(excel_file_data)} bytes"
-                    )
-
-                # Download PowerPoint file from SharePoint if needed
-                if sharepoint_pptx_url or sharepoint_pptx_id:
-                    if sharepoint_pptx_url:
-                        # Use direct download via Shares API for URLs
-                        pptx_file_data = graph_client.download_file_from_sharing_url(
-                            sharepoint_pptx_url
-                        )
-                    else:
-                        # Use item ID download for direct IDs
-                        pptx_file_data = graph_client.download_file_to_memory(
-                            sharepoint_pptx_id
-                        )
-
-                    pptx_file = io.BytesIO(pptx_file_data)
-                    pptx_file.filename = "sharepoint_template.pptx"
-                    if is_json_request:
-                        pptx_data = pptx_file_data  # Store for later file saving
-
-                    logger.info(
-                        f"Downloaded PowerPoint file from SharePoint: {len(pptx_file_data)} bytes"
-                    )
-
-            except Exception as e:
-                logger.error(f"Failed to download file from SharePoint: {e}")
-                return create_error_response(
-                    ValidationError(f"Failed to download file from SharePoint: {e}"),
-                    400,
-                )
 
         # If no configuration provided, use auto-detection
         if not extraction_config:
@@ -1389,64 +1510,65 @@ def manage_config() -> Tuple[Dict[str, Any], int]:
 
 
 @app.route("/api/v1/extract", methods=["POST"])
-def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
-    """Extract data from specified Excel sheets and return as JSON."""
+def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[Dict[str, Any], int], Any]:
+    """Extract data from specified Excel sheets and return as JSON.
+    
+    Args:
+        internal_data: Optional dict for internal/job queue calls. If provided,
+                      bypasses Flask request parsing and uses this data directly.
+    """
     
     # CRITICAL REQUEST TRACKING  
     logger.info("🟢" * 50)
-    logger.info("🚀 /api/v1/extract ENDPOINT HIT - REQUEST RECEIVED")
-    
-    # Use request handler for logging and detection
-    RequestPayloadDetector.log_request_info(request)
+    if internal_data:
+        logger.info("🚀 /api/v1/extract INTERNAL CALL - JOB QUEUE MODE")
+    else:
+        logger.info("🚀 /api/v1/extract ENDPOINT HIT - REQUEST RECEIVED")
+        # Use request handler for logging and detection
+        RequestPayloadDetector.log_request_info(request)
     
     logger.info("🟢" * 50)
     start_time = datetime.datetime.now()
 
     try:
-        # Detect payload mode using request handler
-        is_json_request, has_form_data, has_files = RequestPayloadDetector.detect_payload_mode(request)
-        
-        # Initialize payload parser
-        parser = PayloadParser(request, is_json_request)
-        
-        logger.info(
-            f"Extract request mode - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}"
-        )
-        
-        # Get SharePoint info from request (supports both naming conventions)
-        sharepoint_url, sharepoint_item_id = parser.get_sharepoint_info()
-
-        # Get excel file from request
-        excel_file = None
-        try:
-            excel_file = parser.get_file("excel_file", required=False)
-        except ValidationError as e:
-            # File is only required if no SharePoint reference
-            if not sharepoint_url and not sharepoint_item_id:
+        if internal_data:
+            # Job queue mode - use provided data directly
+            logger.info("Using internal data for job queue processing")
+            
+            # Extract parameters directly from internal_data
+            sharepoint_url = internal_data.get('sharepoint_excel_url')
+            sharepoint_item_id = internal_data.get('sharepoint_excel_id')
+            excel_file = None
+            sheet_names = internal_data.get('sheet_names')
+            config = internal_data.get('config')
+            
+            # Handle base64 Excel file if provided
+            if 'excel_file_base64' in internal_data:
+                import base64
+                excel_data = base64.b64decode(internal_data['excel_file_base64'])
+                excel_file = io.BytesIO(excel_data)
+                excel_file.filename = internal_data.get('excel_filename', 'excel_file.xlsx')
+            
+            # Validate required parameters
+            if not sharepoint_url and not sharepoint_item_id and not excel_file:
                 return create_error_response(
                     ValidationError(
                         "Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"
                     ),
                     400,
                 )
-        
-        # Validate request - either file upload OR SharePoint reference
-        if not sharepoint_url and not sharepoint_item_id and not excel_file:
-            return create_error_response(
-                ValidationError(
-                    "Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"
-                ),
-                400,
-            )
-
-        # Get sheet_names parameter (required)
-        try:
-            sheet_names = parser.get_json_param("sheet_names", required=True)
+            
+            if not sheet_names:
+                return create_error_response(
+                    ValidationError("sheet_names parameter is required"), 400
+                )
+            
+            # Validate sheet_names
             if not isinstance(sheet_names, list):
                 return create_error_response(
                     ValidationError("sheet_names must be a list of strings"), 400
                 )
-
+            
             # Validate all items are strings
             for name in sheet_names:
                 if not isinstance(name, str):
@@ -1458,37 +1580,115 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
                 return create_error_response(
                     ValidationError("sheet_names list cannot be empty"), 400
                 )
-
-        except ValidationError as e:
-            return create_error_response(e, 400)
-
-        # Get configuration (optional)
-        config = None
-        try:
-            config = parser.get_json_param("config", default=None, required=False)
-        except ValidationError as e:
-            return create_error_response(
-                ValidationError(f"Invalid JSON configuration: {e}"), 400
+                
+        else:
+            # Normal API mode - use Flask request parsing
+            # Detect payload mode using request handler
+            is_json_request, has_form_data, has_files = RequestPayloadDetector.detect_payload_mode(request)
+            
+            # Initialize payload parser
+            parser = PayloadParser(request, is_json_request)
+            
+            logger.info(
+                f"Extract request mode - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}"
             )
+            
+            # Get SharePoint info from request (supports both naming conventions)
+            sharepoint_url, sharepoint_item_id = parser.get_sharepoint_info()
 
-        # Get auto-detect setting
-        auto_detect_str = parser.get_param("auto_detect", default="true")
-        auto_detect = auto_detect_str.lower() == "true" if isinstance(auto_detect_str, str) else bool(auto_detect_str)
-
-        # Get max_rows parameter (optional)
-        max_rows = None
-        max_rows_str = parser.get_param("max_rows")
-        if max_rows_str:
+            # Get excel file from request
+            excel_file = None
             try:
-                max_rows = int(max_rows_str)
-                if max_rows <= 0:
+                excel_file = parser.get_file("excel_file", required=False)
+            except ValidationError as e:
+                # File is only required if no SharePoint reference
+                if not sharepoint_url and not sharepoint_item_id:
                     return create_error_response(
-                        ValidationError("max_rows must be a positive integer"), 400
+                        ValidationError(
+                            "Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"
+                        ),
+                        400,
                     )
-            except ValueError:
+            
+            # Validate request - either file upload OR SharePoint reference
+            if not sharepoint_url and not sharepoint_item_id and not excel_file:
                 return create_error_response(
-                    ValidationError("max_rows must be a valid integer"), 400
+                    ValidationError(
+                        "Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"
+                    ),
+                    400,
                 )
+
+            # Get sheet_names parameter (required)
+            try:
+                sheet_names = parser.get_json_param("sheet_names", required=True)
+                if not isinstance(sheet_names, list):
+                    return create_error_response(
+                        ValidationError("sheet_names must be a list of strings"), 400
+                    )
+
+                # Validate all items are strings
+                for name in sheet_names:
+                    if not isinstance(name, str):
+                        return create_error_response(
+                            ValidationError("All items in sheet_names must be strings"), 400
+                        )
+
+                if not sheet_names:
+                    return create_error_response(
+                        ValidationError("sheet_names list cannot be empty"), 400
+                    )
+
+            except ValidationError as e:
+                return create_error_response(e, 400)
+
+            # Get configuration (optional)
+            config = None
+            try:
+                config = parser.get_json_param("config", default=None, required=False)
+            except ValidationError as e:
+                return create_error_response(
+                    ValidationError(f"Invalid JSON configuration: {e}"), 400
+                )
+
+        # Get auto-detect setting and max_rows (handle both modes)
+        if internal_data:
+            # Internal mode - extract from internal_data
+            auto_detect_str = internal_data.get("auto_detect", "true")
+            auto_detect = auto_detect_str.lower() == "true" if isinstance(auto_detect_str, str) else bool(auto_detect_str)
+            
+            max_rows = None
+            max_rows_str = internal_data.get("max_rows")
+            if max_rows_str:
+                try:
+                    max_rows = int(max_rows_str)
+                    if max_rows <= 0:
+                        return create_error_response(
+                            ValidationError("max_rows must be a positive integer"), 400
+                        )
+                except ValueError:
+                    return create_error_response(
+                        ValidationError("max_rows must be a valid integer"), 400
+                    )
+        else:
+            # Normal API mode - extract from parser
+            auto_detect_str = parser.get_param("auto_detect", default="true")
+            auto_detect = auto_detect_str.lower() == "true" if isinstance(auto_detect_str, str) else bool(auto_detect_str)
+
+            # Get max_rows parameter (optional)
+            max_rows = None
+            max_rows_str = parser.get_param("max_rows")
+            if max_rows_str:
+                try:
+                    max_rows = int(max_rows_str)
+                    if max_rows <= 0:
+                        return create_error_response(
+                            ValidationError("max_rows must be a positive integer"), 400
+                        )
+                except ValueError:
+                    return create_error_response(
+                        ValidationError("max_rows must be a valid integer"), 400
+                    )
 
         logger.info(
             f"Extracting data from sheets {sheet_names} with auto_detect={auto_detect}, max_rows={max_rows}"
@@ -1500,66 +1700,55 @@ def extract_data_endpoint() -> Union[Tuple[Dict[str, Any], int], Any]:
             config = config_manager.get_default_config() or {"global_settings": {"sharepoint": {}}}
         
         sharepoint_config = config.get("global_settings", {}).get("sharepoint", {})
+        
+        # Add production environment diagnostics for SharePoint issues
+        logger.info("🌍 Production Environment Diagnostics:")
+        import os
+        logger.info(f"🌍 Current working directory: {os.getcwd()}")
+        logger.info(f"🌍 Python executable: {os.sys.executable}")
+        logger.info(f"🌍 Environment type: {'PRODUCTION' if os.getenv('FLASK_ENV') == 'production' else 'DEVELOPMENT'}")
+        logger.info(f"🌍 SharePoint config received: {sharepoint_config}")
+        
+        # Check if this is a Cloud Function environment
+        if os.getenv('FUNCTION_TARGET'):
+            logger.info("☁️ Running in Google Cloud Function environment")
+        elif os.getenv('GAE_INSTANCE'):
+            logger.info("☁️ Running in Google App Engine environment")
+        else:
+            logger.info("💻 Running in local/standard environment")
 
-        # Load Graph API credentials with tenant_id from config
-        config_tenant_id = sharepoint_config.get("tenant_id")
-        graph_credentials = get_graph_api_credentials(config_tenant_id)
-
-        # Handle SharePoint file sources
+        # Handle SharePoint file sources using centralized handler (both modes)
         if sharepoint_url or sharepoint_item_id:
-            if not graph_credentials:
-                return create_error_response(
-                    ValidationError(
-                        "Graph API credentials required for SharePoint file access"
-                    ),
-                    400,
-                )
-
-            # Minimal validation - URLs can auto-resolve site/drive info
-            if not sharepoint_config.get("enabled"):
-                return create_error_response(
-                    ValidationError(
-                        "SharePoint must be enabled in config.global_settings.sharepoint"
-                    ),
-                    400,
-                )
-
             try:
-                # Initialize Graph API client with SharePoint config
-                from .graph_api_client import GraphAPIClient
-
-                graph_client = GraphAPIClient(
-                    client_id=graph_credentials["client_id"],
-                    client_secret=graph_credentials["client_secret"],
-                    tenant_id=graph_credentials["tenant_id"],
-                    sharepoint_config=sharepoint_config,
-                )
-
-                # Get item ID from URL if needed
-                if sharepoint_url:
-                    item_id = graph_client.get_sharepoint_item_id_from_url(
-                        sharepoint_url
+                if internal_data:
+                    # Internal mode - use SharePointFileHandler directly
+                    from .utils.sharepoint_file_handler import SharePointFileHandler
+                    sp_handler = SharePointFileHandler(sharepoint_config)
+                    sharepoint_file = sp_handler.download_file(
+                        sharepoint_url=sharepoint_url,
+                        sharepoint_item_id=sharepoint_item_id,
+                        default_filename="sharepoint_file.xlsx"
                     )
+                    if sharepoint_file:
+                        excel_file = sharepoint_file
+                        logger.info("✅ Using SharePoint file for extraction (internal mode)")
                 else:
-                    item_id = sharepoint_item_id
-
-                # Download file to memory
-                file_data = graph_client.download_file_to_memory(item_id)
-                excel_file = io.BytesIO(file_data)
-                excel_file.filename = "sharepoint_file.xlsx"
-
-                logger.info(
-                    f"Downloaded Excel file from SharePoint: {len(file_data)} bytes"
-                )
-
+                    # Normal API mode - use parser method
+                    sharepoint_file = parser.get_sharepoint_file(sharepoint_config, "sharepoint_file.xlsx")
+                    if sharepoint_file:
+                        excel_file = sharepoint_file
+                        logger.info("✅ Using SharePoint file for extraction")
+            except ValidationError as e:
+                return create_error_response(e, 400)
             except Exception as e:
-                logger.error(f"Failed to download file from SharePoint: {e}")
                 return create_error_response(
-                    ValidationError(f"Failed to download file from SharePoint: {e}"),
-                    400,
+                    ValidationError(f"SharePoint file access failed: {e}"), 400
                 )
 
         # Process Excel file (use existing memory/file handling logic)
+        # Load Graph API credentials for range image extraction
+        config_tenant_id = sharepoint_config.get("tenant_id")
+        graph_credentials = get_graph_api_credentials(config_tenant_id)
         excel_processor = ExcelProcessor(excel_file, graph_credentials)
         try:
             # Get available sheet names for validation
@@ -1905,66 +2094,19 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
         # Get configuration for SharePoint settings (needed for tenant_id)
         sharepoint_config = config.get("global_settings", {}).get("sharepoint", {})
         
-        # Load Graph API credentials with tenant_id from config
-        config_tenant_id = sharepoint_config.get("tenant_id")
-        graph_credentials = get_graph_api_credentials(config_tenant_id)
-        
-        # Handle SharePoint file source
-        if sharepoint_url or sharepoint_item_id:
-            if not graph_credentials:
-                return create_error_response(
-                    ValidationError(
-                        "Graph API credentials required for SharePoint file access"
-                    ),
-                    400,
-                )
-            
-            # Minimal validation - URLs can auto-resolve site/drive info
-            if not sharepoint_config.get("enabled"):
-                return create_error_response(
-                    ValidationError(
-                        "SharePoint must be enabled in config.global_settings.sharepoint"
-                    ),
-                    400,
-                )
-            
-            try:
-                # Initialize Graph API client with SharePoint config
-                from .graph_api_client import GraphAPIClient
-                
-                graph_client = GraphAPIClient(
-                    client_id=graph_credentials["client_id"],
-                    client_secret=graph_credentials["client_secret"],
-                    tenant_id=graph_credentials["tenant_id"],
-                    sharepoint_config=sharepoint_config,
-                )
-                
-                # Download Excel file from SharePoint
-                if sharepoint_url:
-                    # Use direct download via Shares API for URLs
-                    excel_file_data = graph_client.download_file_from_sharing_url(
-                        sharepoint_url
-                    )
-                else:
-                    # Use item ID download for direct IDs
-                    excel_file_data = graph_client.download_file_to_memory(
-                        sharepoint_item_id
-                    )
-                
-                excel_file = io.BytesIO(excel_file_data)
-                excel_file.filename = "sharepoint_excel.xlsx"
-                excel_data = excel_file_data  # Store for later file saving
-                
-                logger.info(
-                    f"Downloaded Excel file from SharePoint: {len(excel_file_data)} bytes"
-                )
-                
-            except Exception as e:
-                logger.error(f"Failed to download file from SharePoint: {e}")
-                return create_error_response(
-                    ValidationError(f"Failed to download file from SharePoint: {e}"),
-                    400,
-                )
+        # Handle SharePoint file source using centralized handler
+        try:
+            sharepoint_file = parser.get_sharepoint_file(sharepoint_config, "sharepoint_excel.xlsx")
+            if sharepoint_file:
+                excel_file = sharepoint_file
+                excel_data = parser.get_file_data(excel_file)  # Store for later file saving
+                logger.info("✅ Using SharePoint file for update")
+        except ValidationError as e:
+            return create_error_response(e, 400)
+        except Exception as e:
+            return create_error_response(
+                ValidationError(f"SharePoint file access failed: {e}"), 400
+            )
 
         # UNIFIED PROCESSING PATH: Both modes now have same data structure
         # At this point we have:
@@ -2144,78 +2286,104 @@ def excel_pptx_merger(request):
     logger.info(f"Has request.data: {bool(request.data)}")
     logger.info(f"Has request.form: {bool(request.form)}")
     logger.info(f"request.is_json: {request.is_json}")
+    
+    # DEBUG: Log the exact request path and payload for debugging
+    logger.info(f"🔍 DEBUG: Exact request.path = '{request.path}'")
+    logger.info(f"🔍 DEBUG: Request method = '{request.method}'")
+    if request.is_json and request.data:
+        try:
+            request_payload = request.get_json()
+            logger.info(f"🔍 DEBUG: Request JSON payload = {request_payload}")
+        except Exception as e:
+            logger.error(f"🔍 DEBUG: Failed to parse JSON payload: {e}")
 
     # Route request to the appropriate endpoint based on path
     if request.method == "POST":
+        logger.info("🔍 DEBUG: Entering POST request handling")
         try:
             # Extract endpoint - requires excel_file and sheet_names
             if request.path == "/api/v1/extract":
-                logger.info("🔄 Routing to extract_data_endpoint()")
+                logger.info("🔄 DEBUG: Matched /api/v1/extract - routing to extract_data_endpoint()")
                 return extract_data_endpoint()
 
             # Update endpoint - handle before general file validation
             elif request.path == "/api/v1/update":
-                logger.info("🔄 Routing to update_excel_file()")
+                logger.info("🔄 DEBUG: Matched /api/v1/update - routing to update_excel_file()")
                 return update_excel_file()
 
             # Merge endpoint - handle before general file validation (supports both multipart and JSON modes)
             elif request.path == "/api/v1/merge":
-                logger.info("🔄 Routing to merge_files() - dual mode support enabled")
+                logger.info("🔄 DEBUG: Matched /api/v1/merge - routing to merge_files()")
                 return merge_files()
+            
+            # Job Queue endpoints
+            elif request.path == "/api/v1/jobs/start":
+                logger.info("🔄 DEBUG: Matched /api/v1/jobs/start - routing to start_job()")
+                return start_job()
+            
+            elif request.path.startswith("/api/v1/jobs/") and request.path.endswith("/result"):
+                job_id = request.path.split("/")[4]  # /api/v1/jobs/{jobId}/result
+                logger.info(f"🔄 Routing to get_job_result({job_id})")
+                return get_job_result(job_id)
 
             # Check if files were uploaded for other endpoints (preview, diagnose, etc.)
-            if not request.files:
-                logger.warning(
-                    "❌ No files found in request for endpoint requiring file uploads"
-                )
-                logger.warning(
-                    "This is normal for JSON mode endpoints that bypass this check"
-                )
-                # Cloud Functions might receive files differently
-                return (
-                    jsonify(
-                        create_error_response(
-                            ValidationError("No files were uploaded"), 400
-                        )[0]
-                    ),
-                    400,
-                )
-
-            # Preview endpoint - requires both excel_file and pptx_file (multipart only)
-            if request.path == "/api/v1/preview":
-                if (
-                    "excel_file" not in request.files
-                    or "pptx_file" not in request.files
-                ):
+            # This check should only run if we haven't already handled the request above
+            else:
+                logger.info("🔍 DEBUG: Reached the else block - none of the specific endpoints matched")
+                logger.info(f"🔍 DEBUG: request.path = '{request.path}' did not match any known endpoints")
+                if not request.files:
+                    logger.warning(
+                        "❌ No files found in request for endpoint requiring file uploads"
+                    )
+                    logger.warning(
+                        "This is normal for JSON mode endpoints that bypass this check"
+                    )
+                    logger.error(f"🔍 DEBUG: About to return 'No files were uploaded' error for path: {request.path}")
+                    # Cloud Functions might receive files differently
                     return (
                         jsonify(
                             create_error_response(
-                                ValidationError(
-                                    "Both 'excel_file' and 'pptx_file' are required"
-                                ),
-                                400,
-                            )[0]
-                        ),
-                        400,
-                    )
+                            ValidationError("No files were uploaded"), 400
+                        )[0]
+                    ),
+                            400,
+                        )
 
-                # Process the request using the appropriate endpoint handler
-                return preview_merge()
+                # Preview endpoint - requires both excel_file and pptx_file (multipart only)
+                if request.path == "/api/v1/preview":
+                    if (
+                        "excel_file" not in request.files
+                        or "pptx_file" not in request.files
+                    ):
+                        return (
+                            jsonify(
+                                create_error_response(
+                                    ValidationError(
+                                        "Both 'excel_file' and 'pptx_file' are required"
+                                    ),
+                                    400,
+                                )[0]
+                            ),
+                            400,
+                        )
 
-            # Config endpoint
-            elif request.path == "/api/v1/config":
-                return manage_config()
+                    # Process the request using the appropriate endpoint handler
+                    return preview_merge()
 
-            # Stats endpoint
-            elif request.path == "/api/v1/stats":
-                return get_stats()
+                # Config endpoint
+                elif request.path == "/api/v1/config":
+                    return manage_config()
 
-            # Unknown endpoint
-            else:
-                return (
-                    jsonify(
-                        create_error_response(
-                            ValidationError(f"Unknown endpoint: {request.path}"), 404
+                # Stats endpoint
+                elif request.path == "/api/v1/stats":
+                    return get_stats()
+
+                # Unknown endpoint
+                else:
+                    return (
+                        jsonify(
+                            create_error_response(
+                                ValidationError(f"Unknown endpoint: {request.path}"), 404
                         )[0]
                     ),
                     404,
@@ -2230,6 +2398,21 @@ def excel_pptx_merger(request):
             return manage_config()
         elif request.path == "/api/v1/stats":
             return get_stats()
+        # Job Queue GET endpoints
+        elif request.path.startswith("/api/v1/jobs/") and "/status" in request.path:
+            job_id = request.path.split("/")[4]  # /api/v1/jobs/{jobId}/status
+            logger.info(f"🔄 Routing to get_job_status({job_id})")
+            return get_job_status(job_id)
+        elif request.path.startswith("/api/v1/jobs/") and request.path.endswith("/result"):
+            job_id = request.path.split("/")[4]  # /api/v1/jobs/{jobId}/result
+            logger.info(f"🔄 Routing to get_job_result({job_id}) - GET request")
+            return get_job_result(job_id)
+        elif request.path == "/api/v1/jobs":
+            logger.info("🔄 Routing to list_jobs()")
+            return list_jobs()
+        elif request.path == "/api/v1/jobs/stats":
+            logger.info("🔄 Routing to get_job_stats()")
+            return get_job_stats()
         else:
             return (
                 jsonify(
@@ -2242,11 +2425,26 @@ def excel_pptx_merger(request):
                 ),
                 405,
             )
+    elif request.method == "DELETE":
+        # Handle DELETE requests for job cancellation
+        if request.path.startswith("/api/v1/jobs/") and not "/status" in request.path and not "/result" in request.path:
+            job_id = request.path.split("/")[4]  # /api/v1/jobs/{jobId}
+            logger.info(f"🔄 Routing to delete_job({job_id})")
+            return delete_job(job_id)
+        else:
+            return (
+                jsonify(
+                    create_error_response(
+                        ValidationError(f"DELETE method not supported for endpoint: {request.path}"), 405
+                    )[0]
+                ),
+                405,
+            )
     else:
         return (
             jsonify(
                 create_error_response(
-                    ValidationError("Only POST and GET methods are supported"), 405
+                    ValidationError("Only POST, GET, and DELETE methods are supported"), 405
                 )[0]
             ),
             405,

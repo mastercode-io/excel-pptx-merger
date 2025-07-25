@@ -378,11 +378,11 @@ class GCSStorageBackend(StorageBackend):
 
         # Handle both bytes and file-like objects
         if isinstance(content, bytes):
-            blob.upload_from_string(content)
+            blob.upload_from_string(content, content_type=content_type)
         else:
             # Assume it's a file-like object
             content.seek(0)
-            blob.upload_from_file(content)
+            blob.upload_from_file(content, content_type=content_type)
 
         return file_path
 

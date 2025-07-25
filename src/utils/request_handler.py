@@ -270,6 +270,73 @@ class PayloadParser:
             "sharepoint_pptx_id": self.get_param("sharepoint_pptx_id"),
         }
     
+    def get_sharepoint_file(
+        self, 
+        sharepoint_config: Dict[str, Any], 
+        default_filename: str = "sharepoint_file.xlsx"
+    ) -> Optional[io.BytesIO]:
+        """Get file from SharePoint using centralized handler.
+        
+        Args:
+            sharepoint_config: SharePoint configuration from global_settings
+            default_filename: Default filename for downloaded file
+            
+        Returns:
+            BytesIO object with downloaded file, or None if no SharePoint reference
+            
+        Raises:
+            ValidationError: If SharePoint access fails
+        """
+        sharepoint_url, sharepoint_item_id = self.get_sharepoint_info()
+        
+        # Return None if no SharePoint reference
+        if not sharepoint_url and not sharepoint_item_id:
+            return None
+        
+        # Use centralized SharePoint handler
+        from .sharepoint_file_handler import SharePointFileHandler
+        
+        sp_handler = SharePointFileHandler(sharepoint_config)
+        return sp_handler.download_file(
+            sharepoint_url=sharepoint_url,
+            sharepoint_item_id=sharepoint_item_id,
+            default_filename=default_filename
+        )
+    
+    def get_sharepoint_excel_file(self, sharepoint_config: Dict[str, Any]) -> Optional[io.BytesIO]:
+        """Get Excel file from SharePoint using excel-specific parameters."""
+        sharepoint_url = self.get_param("sharepoint_excel_url")
+        sharepoint_item_id = self.get_param("sharepoint_excel_id")
+        
+        if not sharepoint_url and not sharepoint_item_id:
+            return None
+        
+        from .sharepoint_file_handler import SharePointFileHandler
+        
+        sp_handler = SharePointFileHandler(sharepoint_config)
+        return sp_handler.download_file(
+            sharepoint_url=sharepoint_url,
+            sharepoint_item_id=sharepoint_item_id,
+            default_filename="sharepoint_excel.xlsx"
+        )
+    
+    def get_sharepoint_pptx_file(self, sharepoint_config: Dict[str, Any]) -> Optional[io.BytesIO]:
+        """Get PowerPoint file from SharePoint using pptx-specific parameters."""
+        sharepoint_url = self.get_param("sharepoint_pptx_url")
+        sharepoint_item_id = self.get_param("sharepoint_pptx_id")
+        
+        if not sharepoint_url and not sharepoint_item_id:
+            return None
+        
+        from .sharepoint_file_handler import SharePointFileHandler
+        
+        sp_handler = SharePointFileHandler(sharepoint_config)
+        return sp_handler.download_file(
+            sharepoint_url=sharepoint_url,
+            sharepoint_item_id=sharepoint_item_id,
+            default_filename="sharepoint_template.pptx"
+        )
+    
     def get_file_data(self, file_obj: Union[FileStorage, io.BytesIO]) -> bytes:
         """Get raw bytes from a file object.
         

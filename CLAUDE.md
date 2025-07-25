@@ -69,12 +69,15 @@ docker run -p 5000:5000 excel-pptx-merger:latest
 - **src/pptx_processor.py**: PowerPoint template processing and merge field replacement
 - **src/config_manager.py**: Configuration management for extraction rules
 - **src/temp_file_manager.py**: Temporary file handling with cleanup
+- **src/utils/sharepoint_file_handler.py**: Centralized SharePoint file access for all endpoints
+- **src/utils/request_handler.py**: Unified request processing with SharePoint integration
 
 ### Key Features
 - **Dual Processing Modes**: Memory-only processing for Cloud Functions or file-based for local development
 - **Enhanced Image Extraction**: Extracts images from Excel with position information and base64 encoding
 - **Flexible Configuration**: JSON-based extraction rules with support for key-value pairs and tables
 - **Multi-Environment Support**: Development, testing, and production configurations
+- **Centralized SharePoint Integration**: Unified SharePoint file access across all endpoints via SharePointFileHandler
 
 ### Data Flow
 1. Excel files processed using pandas/openpyxl with configurable extraction rules

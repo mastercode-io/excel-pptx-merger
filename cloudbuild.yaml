@@ -20,13 +20,24 @@ steps:
       - '--allow-unauthenticated'
       - '--memory=1024MB'
       - '--timeout=540s'
-      - '--set-env-vars=STORAGE_BACKEND=GCS,GCS_BUCKET_NAME=${_BUCKET_NAME},GCS_BASE_PREFIX=${_BASE_PREFIX},API_KEY=${_API_KEY},FLASK_DEBUG=true,DEVELOPMENT_MODE=true,LOG_LEVEL=DEBUG'
+      - '--set-env-vars=STORAGE_BACKEND=GCS,GCS_BUCKET_NAME=${_BUCKET_NAME},GCS_BASE_PREFIX=${_BASE_PREFIX},API_KEY=${_API_KEY},FLASK_DEBUG=true,DEVELOPMENT_MODE=true,LOG_LEVEL=DEBUG,GRAPH_CLIENT_ID=$$GRAPH_CLIENT_ID,GRAPH_CLIENT_SECRET=$$GRAPH_CLIENT_SECRET,GRAPH_TENANT_ID=$$GRAPH_TENANT_ID'
+    secretEnv: ['GRAPH_CLIENT_ID', 'GRAPH_CLIENT_SECRET', 'GRAPH_TENANT_ID']
 
 substitutions:
   _REGION: europe-west2
   _BUCKET_NAME: excel-pptx-merger-storage-uk
   _BASE_PREFIX: temp
   _API_KEY: changeme-in-production
+
+# Secure Graph API credentials using Google Secret Manager
+availableSecrets:
+  secretManager:
+  - versionName: projects/${PROJECT_ID}/secrets/excel-pptx-merger-graph-client-id/versions/latest
+    env: 'GRAPH_CLIENT_ID'
+  - versionName: projects/${PROJECT_ID}/secrets/excel-pptx-merger-graph-client-secret/versions/latest
+    env: 'GRAPH_CLIENT_SECRET'
+  - versionName: projects/${PROJECT_ID}/secrets/excel-pptx-merger-graph-tenant-id/versions/latest
+    env: 'GRAPH_TENANT_ID'
 
 options:
   logging: CLOUD_LOGGING_ONLY
