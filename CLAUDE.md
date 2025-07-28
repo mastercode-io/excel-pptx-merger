@@ -233,6 +233,17 @@ Development mode saves debug information including extracted data and copies of 
 
 ### Deployment Notes
 - **Production**: Uses memory-only processing with Local storage backend
-- **API Authentication**: Managed manually (API_KEY environment variable not set in deploy script)
+- **API Authentication**: API_KEY stored in Google Secret Manager (excel-pptx-merger-api-key)
 - **Secrets Management**: Graph API credentials stored in Google Secret Manager
 - **Region**: Deployed to europe-west2 for European users
+
+### Critical Secret Management Gotcha
+**IMPORTANT**: When creating secrets with `echo`, ALWAYS use `echo -n` to prevent adding newline characters:
+```bash
+# CORRECT - prevents newline from being added to secret
+echo -n "your-api-key-value" | gcloud secrets create secret-name --data-file=-
+
+# WRONG - adds newline character, causing authentication failures
+echo "your-api-key-value" | gcloud secrets create secret-name --data-file=-
+```
+This issue can cause 401 authentication errors even when the API key appears correct in logs.

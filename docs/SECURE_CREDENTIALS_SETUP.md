@@ -23,6 +23,9 @@ export PROJECT_ID="your-gcp-project-id"
 echo "your-graph-client-id-uuid" | gcloud secrets create excel-pptx-merger-graph-client-id --data-file=-
 echo "your-graph-client-secret-value" | gcloud secrets create excel-pptx-merger-graph-client-secret --data-file=-
 echo "your-tenant-id-uuid" | gcloud secrets create excel-pptx-merger-graph-tenant-id --data-file=-
+
+# Create API_KEY secret for authentication
+echo "your-api-key-value" | gcloud secrets create excel-pptx-merger-api-key --data-file=-
 ```
 
 ### 2. Grant Access to Cloud Build Service Account
@@ -43,6 +46,10 @@ gcloud secrets add-iam-policy-binding excel-pptx-merger-graph-client-secret \
 gcloud secrets add-iam-policy-binding excel-pptx-merger-graph-tenant-id \
     --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
     --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding excel-pptx-merger-api-key \
+    --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
 ```
 
 ### 3. Grant Access to Cloud Functions Service Account
@@ -58,6 +65,10 @@ gcloud secrets add-iam-policy-binding excel-pptx-merger-graph-client-secret \
     --role="roles/secretmanager.secretAccessor"
 
 gcloud secrets add-iam-policy-binding excel-pptx-merger-graph-tenant-id \
+    --member="serviceAccount:${PROJECT_ID}@appspot.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding excel-pptx-merger-api-key \
     --member="serviceAccount:${PROJECT_ID}@appspot.gserviceaccount.com" \
     --role="roles/secretmanager.secretAccessor"
 ```

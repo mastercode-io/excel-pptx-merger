@@ -65,11 +65,11 @@ def setup_logging() -> None:
     """Setup logging configuration."""
     log_level = app_config.get("log_level", "INFO").upper()
     verbose_logging = os.environ.get("VERBOSE_LOGGING", "true").lower() == "true"
-    
+
     # If verbose logging is disabled, increase the default log level
     if not verbose_logging and log_level in ["DEBUG", "INFO"]:
         log_level = "WARNING"
-    
+
     logging.getLogger().setLevel(getattr(logging, log_level, logging.INFO))
 
     # Set up format
@@ -81,7 +81,7 @@ def setup_logging() -> None:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logging.getLogger().addHandler(console_handler)
-    
+
     # Suppress verbose loggers when VERBOSE_LOGGING is false
     if not verbose_logging:
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -244,7 +244,7 @@ def start_job():
     try:
         # Clean up expired jobs first
         job_queue.cleanup_expired_jobs()
-        
+
         # Parse request data
         if request.is_json:
             data = request.get_json()
@@ -252,47 +252,56 @@ def start_job():
             return create_error_response(
                 ValidationError("Job requests must be JSON"), 400
             )
-        
+
         # Validate required fields
-        if not data or 'endpoint' not in data or 'payload' not in data:
+        if not data or "endpoint" not in data or "payload" not in data:
             return create_error_response(
                 ValidationError("Both 'endpoint' and 'payload' are required"), 400
             )
-        
-        endpoint = data['endpoint']
-        payload = data['payload']
-        
+
+        endpoint = data["endpoint"]
+        payload = data["payload"]
+
         # Validate endpoint is supported
         if not handler_registry.is_supported(endpoint):
             return create_error_response(
-                ValidationError(f"Endpoint '{endpoint}' is not supported for async processing. Supported: {handler_registry.get_supported_endpoints()}"), 400
+                ValidationError(
+                    f"Endpoint '{endpoint}' is not supported for async processing. Supported: {handler_registry.get_supported_endpoints()}"
+                ),
+                400,
             )
-        
+
         # Get client IP for rate limiting
-        client_ip = request.environ.get('REMOTE_ADDR', '127.0.0.1')
-        
+        client_ip = request.environ.get("REMOTE_ADDR", "127.0.0.1")
+
         # Create job
         job_id = job_queue.create_job(endpoint, payload, client_ip)
-        
+
         # Start processing in background thread
         import threading
+
         def process_job_async():
             handler_func = handler_registry.get_handler(endpoint)
             job_queue.process_job(job_id, handler_func)
-        
+
         thread = threading.Thread(target=process_job_async, daemon=True)
         thread.start()
-        
+
         logger.info(f"Started async job {job_id} for endpoint {endpoint}")
-        
-        return jsonify({
-            "success": True,
-            "jobId": job_id,
-            "status": "started",
-            "endpoint": endpoint,
-            "estimatedTime": "30-60 seconds"
-        }), 200
-        
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "jobId": job_id,
+                    "status": "started",
+                    "endpoint": endpoint,
+                    "estimatedTime": "30-60 seconds",
+                }
+            ),
+            200,
+        )
+
     except ValueError as e:
         return create_error_response(ValidationError(str(e)), 400)
     except Exception as e:
@@ -306,16 +315,16 @@ def get_job_status(job_id: str):
     try:
         # Clean up expired jobs
         job_queue.cleanup_expired_jobs()
-        
+
         # Get job status
         status = job_queue.get_job_status(job_id)
         if not status:
             return create_error_response(
                 ValidationError(f"Job '{job_id}' not found"), 404
             )
-        
+
         return jsonify(status), 200
-        
+
     except Exception as e:
         logger.exception(f"Error getting job status for {job_id}")
         return create_error_response(e, 500)
@@ -327,19 +336,19 @@ def get_job_result(job_id: str):
     try:
         # Clean up expired jobs
         job_queue.cleanup_expired_jobs()
-        
+
         # Get job result (with cleanup)
         result = job_queue.get_job_result(job_id, cleanup=True)
         if not result:
             return create_error_response(
                 ValidationError(f"Job '{job_id}' not found"), 404
             )
-        
-        if result['success']:
+
+        if result["success"]:
             return jsonify(result), 200
         else:
             return jsonify(result), 400
-        
+
     except Exception as e:
         logger.exception(f"Error getting job result for {job_id}")
         return create_error_response(e, 500)
@@ -351,14 +360,14 @@ def list_jobs():
     try:
         # Clean up expired jobs
         job_queue.cleanup_expired_jobs()
-        
+
         # Get status filter from query params
-        status_filter = request.args.get('status')
-        
+        status_filter = request.args.get("status")
+
         # List jobs
         jobs_list = job_queue.list_jobs(status_filter)
         return jsonify(jobs_list), 200
-        
+
     except Exception as e:
         logger.exception("Error listing jobs")
         return create_error_response(e, 500)
@@ -374,12 +383,14 @@ def delete_job(job_id: str):
             return create_error_response(
                 ValidationError(f"Job '{job_id}' not found"), 404
             )
-        
-        return jsonify({
-            "success": True,
-            "message": f"Job '{job_id}' deleted successfully"
-        }), 200
-        
+
+        return (
+            jsonify(
+                {"success": True, "message": f"Job '{job_id}' deleted successfully"}
+            ),
+            200,
+        )
+
     except Exception as e:
         logger.exception(f"Error deleting job {job_id}")
         return create_error_response(e, 500)
@@ -391,13 +402,10 @@ def get_job_stats():
     try:
         # Clean up expired jobs
         job_queue.cleanup_expired_jobs()
-        
+
         stats = job_queue.get_stats()
-        return jsonify({
-            "success": True,
-            "stats": stats
-        }), 200
-        
+        return jsonify({"success": True, "stats": stats}), 200
+
     except Exception as e:
         logger.exception("Error getting job stats")
         return create_error_response(e, 500)
@@ -406,7 +414,7 @@ def get_job_stats():
 @app.route("/api/v1/merge", methods=["POST"])
 def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
     """Main file processing endpoint with enhanced image support."""
-    
+
     # CRITICAL REQUEST TRACKING
     logger.info("🌟" * 50)
     logger.info("🚀 /api/v1/merge ENDPOINT HIT - REQUEST RECEIVED")
@@ -417,18 +425,22 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
     logger.info(f"📊 Has form: {bool(request.form)}")
     logger.info(f"📊 Is JSON: {request.is_json}")
     logger.info(f"📊 User-Agent: {request.headers.get('User-Agent', 'Not specified')}")
-    logger.info(f"📊 Content-Type: {request.headers.get('Content-Type', 'Not specified')}")
-    logger.info(f"📊 Content-Length: {request.headers.get('Content-Length', 'Not specified')}")
-    
+    logger.info(
+        f"📊 Content-Type: {request.headers.get('Content-Type', 'Not specified')}"
+    )
+    logger.info(
+        f"📊 Content-Length: {request.headers.get('Content-Length', 'Not specified')}"
+    )
+
     # Check for CRM system indicators
     user_agent = request.headers.get("User-Agent", "").lower()
     crm_indicators = ["deluge", "zoho", "crm", "automation", "webhook", "postman"]
     is_likely_crm = any(indicator in user_agent for indicator in crm_indicators)
     if is_likely_crm:
         logger.info("🏢 POTENTIAL CRM/AUTOMATION SYSTEM DETECTED!")
-    
+
     logger.info("🌟" * 50)
-    
+
     try:
         # Enhanced request logging for debugging
         content_type = request.headers.get("Content-Type", "Not specified")
@@ -842,19 +854,21 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         # Handle SharePoint file sources using centralized handler
         try:
             from .utils.sharepoint_file_handler import SharePointFileHandler
-            
+
             # Download Excel file from SharePoint if needed
             if sharepoint_excel_url or sharepoint_excel_id:
                 sp_handler = SharePointFileHandler(sharepoint_config)
                 sharepoint_excel_file = sp_handler.download_file(
                     sharepoint_url=sharepoint_excel_url,
                     sharepoint_item_id=sharepoint_excel_id,
-                    default_filename="sharepoint_excel.xlsx"
+                    default_filename="sharepoint_excel.xlsx",
                 )
                 excel_file = sharepoint_excel_file
                 if is_json_request:
                     sharepoint_excel_file.seek(0)
-                    excel_data = sharepoint_excel_file.read()  # Store for later file saving
+                    excel_data = (
+                        sharepoint_excel_file.read()
+                    )  # Store for later file saving
                 logger.info("✅ Using SharePoint Excel file for merge")
 
             # Download PowerPoint file from SharePoint if needed
@@ -863,12 +877,14 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 sharepoint_pptx_file = sp_handler.download_file(
                     sharepoint_url=sharepoint_pptx_url,
                     sharepoint_item_id=sharepoint_pptx_id,
-                    default_filename="sharepoint_template.pptx"
+                    default_filename="sharepoint_template.pptx",
                 )
                 pptx_file = sharepoint_pptx_file
                 if is_json_request:
                     sharepoint_pptx_file.seek(0)
-                    pptx_data = sharepoint_pptx_file.read()  # Store for later file saving
+                    pptx_data = (
+                        sharepoint_pptx_file.read()
+                    )  # Store for later file saving
                 logger.info("✅ Using SharePoint PowerPoint file for merge")
 
         except ValidationError as e:
@@ -1510,15 +1526,17 @@ def manage_config() -> Tuple[Dict[str, Any], int]:
 
 
 @app.route("/api/v1/extract", methods=["POST"])
-def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[Dict[str, Any], int], Any]:
+def extract_data_endpoint(
+    internal_data: Dict[str, Any] = None
+) -> Union[Tuple[Dict[str, Any], int], Any]:
     """Extract data from specified Excel sheets and return as JSON.
-    
+
     Args:
         internal_data: Optional dict for internal/job queue calls. If provided,
                       bypasses Flask request parsing and uses this data directly.
     """
-    
-    # CRITICAL REQUEST TRACKING  
+
+    # CRITICAL REQUEST TRACKING
     logger.info("🟢" * 50)
     if internal_data:
         logger.info("🚀 /api/v1/extract INTERNAL CALL - JOB QUEUE MODE")
@@ -1526,7 +1544,7 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
         logger.info("🚀 /api/v1/extract ENDPOINT HIT - REQUEST RECEIVED")
         # Use request handler for logging and detection
         RequestPayloadDetector.log_request_info(request)
-    
+
     logger.info("🟢" * 50)
     start_time = datetime.datetime.now()
 
@@ -1534,21 +1552,24 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
         if internal_data:
             # Job queue mode - use provided data directly
             logger.info("Using internal data for job queue processing")
-            
+
             # Extract parameters directly from internal_data
-            sharepoint_url = internal_data.get('sharepoint_excel_url')
-            sharepoint_item_id = internal_data.get('sharepoint_excel_id')
+            sharepoint_url = internal_data.get("sharepoint_excel_url")
+            sharepoint_item_id = internal_data.get("sharepoint_excel_id")
             excel_file = None
-            sheet_names = internal_data.get('sheet_names')
-            config = internal_data.get('config')
-            
+            sheet_names = internal_data.get("sheet_names")
+            config = internal_data.get("config")
+
             # Handle base64 Excel file if provided
-            if 'excel_file_base64' in internal_data:
+            if "excel_file_base64" in internal_data:
                 import base64
-                excel_data = base64.b64decode(internal_data['excel_file_base64'])
+
+                excel_data = base64.b64decode(internal_data["excel_file_base64"])
                 excel_file = io.BytesIO(excel_data)
-                excel_file.filename = internal_data.get('excel_filename', 'excel_file.xlsx')
-            
+                excel_file.filename = internal_data.get(
+                    "excel_filename", "excel_file.xlsx"
+                )
+
             # Validate required parameters
             if not sharepoint_url and not sharepoint_item_id and not excel_file:
                 return create_error_response(
@@ -1557,18 +1578,18 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
                     ),
                     400,
                 )
-            
+
             if not sheet_names:
                 return create_error_response(
                     ValidationError("sheet_names parameter is required"), 400
                 )
-            
+
             # Validate sheet_names
             if not isinstance(sheet_names, list):
                 return create_error_response(
                     ValidationError("sheet_names must be a list of strings"), 400
                 )
-            
+
             # Validate all items are strings
             for name in sheet_names:
                 if not isinstance(name, str):
@@ -1580,19 +1601,23 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
                 return create_error_response(
                     ValidationError("sheet_names list cannot be empty"), 400
                 )
-                
+
         else:
             # Normal API mode - use Flask request parsing
             # Detect payload mode using request handler
-            is_json_request, has_form_data, has_files = RequestPayloadDetector.detect_payload_mode(request)
-            
+            (
+                is_json_request,
+                has_form_data,
+                has_files,
+            ) = RequestPayloadDetector.detect_payload_mode(request)
+
             # Initialize payload parser
             parser = PayloadParser(request, is_json_request)
-            
+
             logger.info(
                 f"Extract request mode - JSON: {is_json_request}, Form data: {has_form_data}, Files: {has_files}"
             )
-            
+
             # Get SharePoint info from request (supports both naming conventions)
             sharepoint_url, sharepoint_item_id = parser.get_sharepoint_info()
 
@@ -1609,7 +1634,7 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
                         ),
                         400,
                     )
-            
+
             # Validate request - either file upload OR SharePoint reference
             if not sharepoint_url and not sharepoint_item_id and not excel_file:
                 return create_error_response(
@@ -1631,7 +1656,8 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
                 for name in sheet_names:
                     if not isinstance(name, str):
                         return create_error_response(
-                            ValidationError("All items in sheet_names must be strings"), 400
+                            ValidationError("All items in sheet_names must be strings"),
+                            400,
                         )
 
                 if not sheet_names:
@@ -1655,8 +1681,12 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
         if internal_data:
             # Internal mode - extract from internal_data
             auto_detect_str = internal_data.get("auto_detect", "true")
-            auto_detect = auto_detect_str.lower() == "true" if isinstance(auto_detect_str, str) else bool(auto_detect_str)
-            
+            auto_detect = (
+                auto_detect_str.lower() == "true"
+                if isinstance(auto_detect_str, str)
+                else bool(auto_detect_str)
+            )
+
             max_rows = None
             max_rows_str = internal_data.get("max_rows")
             if max_rows_str:
@@ -1673,7 +1703,11 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
         else:
             # Normal API mode - extract from parser
             auto_detect_str = parser.get_param("auto_detect", default="true")
-            auto_detect = auto_detect_str.lower() == "true" if isinstance(auto_detect_str, str) else bool(auto_detect_str)
+            auto_detect = (
+                auto_detect_str.lower() == "true"
+                if isinstance(auto_detect_str, str)
+                else bool(auto_detect_str)
+            )
 
             # Get max_rows parameter (optional)
             max_rows = None
@@ -1697,22 +1731,27 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
         # Get configuration for SharePoint settings (needed for tenant_id)
         # Use default config if none provided
         if config is None:
-            config = config_manager.get_default_config() or {"global_settings": {"sharepoint": {}}}
-        
+            config = config_manager.get_default_config() or {
+                "global_settings": {"sharepoint": {}}
+            }
+
         sharepoint_config = config.get("global_settings", {}).get("sharepoint", {})
-        
+
         # Add production environment diagnostics for SharePoint issues
         logger.info("🌍 Production Environment Diagnostics:")
         import os
+
         logger.info(f"🌍 Current working directory: {os.getcwd()}")
         logger.info(f"🌍 Python executable: {os.sys.executable}")
-        logger.info(f"🌍 Environment type: {'PRODUCTION' if os.getenv('FLASK_ENV') == 'production' else 'DEVELOPMENT'}")
+        logger.info(
+            f"🌍 Environment type: {'PRODUCTION' if os.getenv('FLASK_ENV') == 'production' else 'DEVELOPMENT'}"
+        )
         logger.info(f"🌍 SharePoint config received: {sharepoint_config}")
-        
+
         # Check if this is a Cloud Function environment
-        if os.getenv('FUNCTION_TARGET'):
+        if os.getenv("FUNCTION_TARGET"):
             logger.info("☁️ Running in Google Cloud Function environment")
-        elif os.getenv('GAE_INSTANCE'):
+        elif os.getenv("GAE_INSTANCE"):
             logger.info("☁️ Running in Google App Engine environment")
         else:
             logger.info("💻 Running in local/standard environment")
@@ -1723,18 +1762,23 @@ def extract_data_endpoint(internal_data: Dict[str, Any] = None) -> Union[Tuple[D
                 if internal_data:
                     # Internal mode - use SharePointFileHandler directly
                     from .utils.sharepoint_file_handler import SharePointFileHandler
+
                     sp_handler = SharePointFileHandler(sharepoint_config)
                     sharepoint_file = sp_handler.download_file(
                         sharepoint_url=sharepoint_url,
                         sharepoint_item_id=sharepoint_item_id,
-                        default_filename="sharepoint_file.xlsx"
+                        default_filename="sharepoint_file.xlsx",
                     )
                     if sharepoint_file:
                         excel_file = sharepoint_file
-                        logger.info("✅ Using SharePoint file for extraction (internal mode)")
+                        logger.info(
+                            "✅ Using SharePoint file for extraction (internal mode)"
+                        )
                 else:
                     # Normal API mode - use parser method
-                    sharepoint_file = parser.get_sharepoint_file(sharepoint_config, "sharepoint_file.xlsx")
+                    sharepoint_file = parser.get_sharepoint_file(
+                        sharepoint_config, "sharepoint_file.xlsx"
+                    )
                     if sharepoint_file:
                         excel_file = sharepoint_file
                         logger.info("✅ Using SharePoint file for extraction")
@@ -2009,21 +2053,25 @@ def diagnose_template() -> Tuple[Dict[str, Any], int]:
 @app.route("/api/v1/update", methods=["POST"])
 def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
     """Update Excel file with provided data - supports both multipart and JSON modes."""
-    
+
     # CRITICAL REQUEST TRACKING
     logger.info("🔵" * 50)
     logger.info("🚀 /api/v1/update ENDPOINT HIT - REQUEST RECEIVED")
-    
+
     # Use request handler for logging and detection
     RequestPayloadDetector.log_request_info(request)
-    
+
     logger.info("🔵" * 50)
     temp_manager = None
 
     try:
         # Detect payload mode using request handler
-        is_json_request, has_form_data, has_files = RequestPayloadDetector.detect_payload_mode(request)
-        
+        (
+            is_json_request,
+            has_form_data,
+            has_files,
+        ) = RequestPayloadDetector.detect_payload_mode(request)
+
         # Initialize payload parser
         parser = PayloadParser(request, is_json_request)
 
@@ -2037,10 +2085,10 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
         update_data = None
         config = None
         include_update_log = False
-        
+
         # Get SharePoint info from request (supports both naming conventions)
         sharepoint_url, sharepoint_item_id = parser.get_sharepoint_info()
-        
+
         # Get excel file from request
         try:
             excel_file = parser.get_file("excel_file", required=False)
@@ -2048,58 +2096,77 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
             # File is only required if no SharePoint reference
             if not sharepoint_url and not sharepoint_item_id:
                 return create_error_response(
-                    ValidationError("Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"),
+                    ValidationError(
+                        "Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"
+                    ),
                     400,
                 )
-        
+
         # Validate request - either file upload OR SharePoint reference
         if not sharepoint_url and not sharepoint_item_id and not excel_file:
             return create_error_response(
-                ValidationError("Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"),
+                ValidationError(
+                    "Excel file, sharepoint_excel_url, or sharepoint_excel_id is required"
+                ),
                 400,
             )
-        
+
         # Get update data, config, and include_update_log parameters
         try:
-            update_data = parser.get_json_param("update_data", default={}, required=True)
+            update_data = parser.get_json_param(
+                "update_data", default={}, required=True
+            )
             config = parser.get_json_param("config", default={}, required=False)
-            
+
             # For include_update_log, handle both boolean and string representations
             if is_json_request:
-                include_update_log = parser.get_param("include_update_log", default=False)
+                include_update_log = parser.get_param(
+                    "include_update_log", default=False
+                )
             else:
                 # In multipart mode, form values are strings
-                include_update_log_str = parser.get_param("include_update_log", default="false")
-                include_update_log = include_update_log_str.lower() in ("true", "1", "yes", "on")
-            
+                include_update_log_str = parser.get_param(
+                    "include_update_log", default="false"
+                )
+                include_update_log = include_update_log_str.lower() in (
+                    "true",
+                    "1",
+                    "yes",
+                    "on",
+                )
+
         except ValidationError as e:
             logger.error(f"Invalid parameters: {e}")
             return create_error_response(e, 400)
-        
+
         logger.info(
             f"Update request - Update data fields: {list(update_data.keys()) if isinstance(update_data, dict) else 'not a dict'}"
         )
         logger.info(f"Update request - Include update log: {include_update_log}")
-        
+
         # Get file data for saving
         if excel_file:
             excel_data = parser.get_file_data(excel_file)
-        
+
         # Validate update data structure
         if not isinstance(update_data, dict):
             return create_error_response(
                 ValidationError("update_data must be a dictionary/object"), 400
             )
-        
+
         # Get configuration for SharePoint settings (needed for tenant_id)
         sharepoint_config = config.get("global_settings", {}).get("sharepoint", {})
-        
+
         # Handle SharePoint file source using centralized handler
         try:
-            sharepoint_file = parser.get_sharepoint_file(sharepoint_config, "sharepoint_excel.xlsx")
+            sharepoint_file = parser.get_sharepoint_file(
+                sharepoint_config, "sharepoint_excel.xlsx"
+            )
             if sharepoint_file:
                 excel_file = sharepoint_file
-                excel_data = parser.get_file_data(excel_file)  # Store for later file saving
+                excel_data = parser.get_file_data(
+                    excel_file
+                )  # Store for later file saving
                 logger.info("✅ Using SharePoint file for update")
         except ValidationError as e:
             return create_error_response(e, 400)
@@ -2286,7 +2353,7 @@ def excel_pptx_merger(request):
     logger.info(f"Has request.data: {bool(request.data)}")
     logger.info(f"Has request.form: {bool(request.form)}")
     logger.info(f"request.is_json: {request.is_json}")
-    
+
     # DEBUG: Log the exact request path and payload for debugging
     logger.info(f"🔍 DEBUG: Exact request.path = '{request.path}'")
     logger.info(f"🔍 DEBUG: Request method = '{request.method}'")
@@ -2303,25 +2370,33 @@ def excel_pptx_merger(request):
         try:
             # Extract endpoint - requires excel_file and sheet_names
             if request.path == "/api/v1/extract":
-                logger.info("🔄 DEBUG: Matched /api/v1/extract - routing to extract_data_endpoint()")
+                logger.info(
+                    "🔄 DEBUG: Matched /api/v1/extract - routing to extract_data_endpoint()"
+                )
                 return extract_data_endpoint()
 
             # Update endpoint - handle before general file validation
             elif request.path == "/api/v1/update":
-                logger.info("🔄 DEBUG: Matched /api/v1/update - routing to update_excel_file()")
+                logger.info(
+                    "🔄 DEBUG: Matched /api/v1/update - routing to update_excel_file()"
+                )
                 return update_excel_file()
 
             # Merge endpoint - handle before general file validation (supports both multipart and JSON modes)
             elif request.path == "/api/v1/merge":
                 logger.info("🔄 DEBUG: Matched /api/v1/merge - routing to merge_files()")
                 return merge_files()
-            
+
             # Job Queue endpoints
             elif request.path == "/api/v1/jobs/start":
-                logger.info("🔄 DEBUG: Matched /api/v1/jobs/start - routing to start_job()")
+                logger.info(
+                    "🔄 DEBUG: Matched /api/v1/jobs/start - routing to start_job()"
+                )
                 return start_job()
-            
-            elif request.path.startswith("/api/v1/jobs/") and request.path.endswith("/result"):
+
+            elif request.path.startswith("/api/v1/jobs/") and request.path.endswith(
+                "/result"
+            ):
                 job_id = request.path.split("/")[4]  # /api/v1/jobs/{jobId}/result
                 logger.info(f"🔄 Routing to get_job_result({job_id})")
                 return get_job_result(job_id)
@@ -2329,8 +2404,12 @@ def excel_pptx_merger(request):
             # Check if files were uploaded for other endpoints (preview, diagnose, etc.)
             # This check should only run if we haven't already handled the request above
             else:
-                logger.info("🔍 DEBUG: Reached the else block - none of the specific endpoints matched")
-                logger.info(f"🔍 DEBUG: request.path = '{request.path}' did not match any known endpoints")
+                logger.info(
+                    "🔍 DEBUG: Reached the else block - none of the specific endpoints matched"
+                )
+                logger.info(
+                    f"🔍 DEBUG: request.path = '{request.path}' did not match any known endpoints"
+                )
                 if not request.files:
                     logger.warning(
                         "❌ No files found in request for endpoint requiring file uploads"
@@ -2338,16 +2417,18 @@ def excel_pptx_merger(request):
                     logger.warning(
                         "This is normal for JSON mode endpoints that bypass this check"
                     )
-                    logger.error(f"🔍 DEBUG: About to return 'No files were uploaded' error for path: {request.path}")
+                    logger.error(
+                        f"🔍 DEBUG: About to return 'No files were uploaded' error for path: {request.path}"
+                    )
                     # Cloud Functions might receive files differently
                     return (
                         jsonify(
                             create_error_response(
-                            ValidationError("No files were uploaded"), 400
-                        )[0]
-                    ),
-                            400,
-                        )
+                                ValidationError("No files were uploaded"), 400
+                            )[0]
+                        ),
+                        400,
+                    )
 
                 # Preview endpoint - requires both excel_file and pptx_file (multipart only)
                 if request.path == "/api/v1/preview":
@@ -2383,11 +2464,12 @@ def excel_pptx_merger(request):
                     return (
                         jsonify(
                             create_error_response(
-                                ValidationError(f"Unknown endpoint: {request.path}"), 404
-                        )[0]
-                    ),
-                    404,
-                )
+                                ValidationError(f"Unknown endpoint: {request.path}"),
+                                404,
+                            )[0]
+                        ),
+                        404,
+                    )
 
         except Exception as e:
             logger.exception("Error processing Cloud Function request")
@@ -2403,7 +2485,9 @@ def excel_pptx_merger(request):
             job_id = request.path.split("/")[4]  # /api/v1/jobs/{jobId}/status
             logger.info(f"🔄 Routing to get_job_status({job_id})")
             return get_job_status(job_id)
-        elif request.path.startswith("/api/v1/jobs/") and request.path.endswith("/result"):
+        elif request.path.startswith("/api/v1/jobs/") and request.path.endswith(
+            "/result"
+        ):
             job_id = request.path.split("/")[4]  # /api/v1/jobs/{jobId}/result
             logger.info(f"🔄 Routing to get_job_result({job_id}) - GET request")
             return get_job_result(job_id)
@@ -2427,7 +2511,11 @@ def excel_pptx_merger(request):
             )
     elif request.method == "DELETE":
         # Handle DELETE requests for job cancellation
-        if request.path.startswith("/api/v1/jobs/") and not "/status" in request.path and not "/result" in request.path:
+        if (
+            request.path.startswith("/api/v1/jobs/")
+            and not "/status" in request.path
+            and not "/result" in request.path
+        ):
             job_id = request.path.split("/")[4]  # /api/v1/jobs/{jobId}
             logger.info(f"🔄 Routing to delete_job({job_id})")
             return delete_job(job_id)
@@ -2435,7 +2523,10 @@ def excel_pptx_merger(request):
             return (
                 jsonify(
                     create_error_response(
-                        ValidationError(f"DELETE method not supported for endpoint: {request.path}"), 405
+                        ValidationError(
+                            f"DELETE method not supported for endpoint: {request.path}"
+                        ),
+                        405,
                     )[0]
                 ),
                 405,
@@ -2444,7 +2535,8 @@ def excel_pptx_merger(request):
         return (
             jsonify(
                 create_error_response(
-                    ValidationError("Only POST, GET, and DELETE methods are supported"), 405
+                    ValidationError("Only POST, GET, and DELETE methods are supported"),
+                    405,
                 )[0]
             ),
             405,

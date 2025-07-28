@@ -5,12 +5,12 @@ This document outlines the implementation of a flexible, general-purpose job que
 
 ## Architecture
 ```
-Client → Netlify Function → Zoho API (decode request_id) 
+Client → Netlify Function → Zoho API (decode request_id)
                          ↓
 Netlify Function → /jobs/start → Background handler processing
                          ↓
 Netlify Function polls /jobs/{jobId}/status until complete
-                         ↓  
+                         ↓
 Netlify Function → /jobs/{jobId}/result → Return to client
 ```
 
@@ -64,7 +64,7 @@ Netlify Function → /jobs/{jobId}/result → Return to client
 
 **Supported Endpoints**:
 - `/api/v1/extract` - Extract data from Excel files
-- `/api/v1/merge` - Merge Excel data into PowerPoint templates  
+- `/api/v1/merge` - Merge Excel data into PowerPoint templates
 - `/api/v1/update` - Update Excel files with new data
 
 ### 2. GET /api/v1/jobs/{jobId}/status
@@ -76,7 +76,7 @@ Netlify Function → /jobs/{jobId}/result → Return to client
 {
   "success": true,
   "jobId": "job_1690123456789_abc123",
-  "status": "running", 
+  "status": "running",
   "progress": 45,
   "message": "Processing /api/v1/extract request...",
   "created_at": "2024-07-24T15:25:00Z",
@@ -238,13 +238,13 @@ def process_job(job_id: str, handler_func: Callable):
     try:
         # Update status to running
         job.update_status(JobStatus.RUNNING, progress=10)
-        
+
         # Call endpoint handler directly with payload
         result = handler_func(job.payload)  # e.g., extract_handler(payload)
-        
+
         # Store result
         job_queue.complete_job(job_id, result)
-        
+
     except Exception as e:
         # Handle errors
         job_queue.fail_job(job_id, str(e))
@@ -398,7 +398,7 @@ curl https://your-gcloud-function.com/api/v1/jobs/job_1690123456789_abc123/resul
 - **Reliability**: Failed jobs provide clear error messages
 - **Flexibility**: Any endpoint can be made asynchronous
 
-### For Developers  
+### For Developers
 - **Zero Refactoring**: Existing endpoints work unchanged
 - **Reusable**: Easy to add new endpoints to the job queue
 - **Clean Architecture**: Clear separation between sync and async processing

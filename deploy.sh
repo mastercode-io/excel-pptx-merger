@@ -56,7 +56,7 @@ gcloud functions deploy ${FUNCTION_NAME} \
     --memory=${MEMORY} \
     --timeout=${TIMEOUT} \
     --set-env-vars="STORAGE_BACKEND=LOCAL,SAVE_FILES=false,FLASK_DEBUG=false,DEVELOPMENT_MODE=false,LOG_LEVEL=INFO" \
-    --set-secrets="GRAPH_CLIENT_ID=excel-pptx-merger-graph-client-id:latest,GRAPH_CLIENT_SECRET=excel-pptx-merger-graph-client-secret:latest,GRAPH_TENANT_ID=excel-pptx-merger-graph-tenant-id:latest"
+    --set-secrets="GRAPH_CLIENT_ID=excel-pptx-merger-graph-client-id:latest,GRAPH_CLIENT_SECRET=excel-pptx-merger-graph-client-secret:latest,GRAPH_TENANT_ID=excel-pptx-merger-graph-tenant-id:latest,API_KEY=excel-pptx-merger-api-key:latest"
 
 # Get the function URL for testing
 REGION="europe-west2"  # From cloudbuild.yaml

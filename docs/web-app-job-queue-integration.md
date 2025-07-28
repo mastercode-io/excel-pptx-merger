@@ -46,10 +46,10 @@ const { jobId } = await jobResponse.json();
 let result;
 do {
   await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
-  
+
   const statusResponse = await fetch(`${API_BASE}/api/v1/jobs/${jobId}/status`);
   const status = await statusResponse.json();
-  
+
   if (status.status === 'completed') {
     const resultResponse = await fetch(`${API_BASE}/api/v1/jobs/${jobId}/result`);
     result = await resultResponse.json();
@@ -57,10 +57,10 @@ do {
   } else if (status.status === 'failed') {
     throw new Error(`Job failed: ${status.message}`);
   }
-  
+
   // Optional: Update progress UI
   updateProgressBar(status.progress || 0);
-  
+
 } while (true);
 
 console.log('Extraction complete:', result.data);
@@ -321,18 +321,18 @@ class ExcelExtractor {
 
   async pollForCompletion(jobId, onProgress = null, maxAttempts = 150) {
     let attempts = 0;
-    
+
     while (attempts < maxAttempts) {
       try {
         // Check status
         const statusResponse = await fetch(`${this.baseUrl}/api/v1/jobs/${jobId}/status`);
-        
+
         if (!statusResponse.ok) {
           throw new Error(`Status check failed: ${statusResponse.statusText}`);
         }
 
         const status = await statusResponse.json();
-        
+
         // Update progress callback
         if (onProgress) {
           onProgress({
@@ -346,7 +346,7 @@ class ExcelExtractor {
         if (status.status === 'completed') {
           // Get results
           const resultResponse = await fetch(`${this.baseUrl}/api/v1/jobs/${jobId}/result`);
-          
+
           if (!resultResponse.ok) {
             throw new Error(`Failed to get results: ${resultResponse.statusText}`);
           }
@@ -354,7 +354,7 @@ class ExcelExtractor {
           const result = await resultResponse.json();
           return result.data; // Return the actual extraction data
         }
-        
+
         if (status.status === 'failed') {
           throw new Error(`Job failed: ${status.message}`);
         }
@@ -370,11 +370,11 @@ class ExcelExtractor {
 
       } catch (error) {
         console.error(`Poll attempt ${attempts + 1} failed:`, error);
-        
+
         if (attempts >= maxAttempts - 1) {
           throw new Error(`Polling failed after ${maxAttempts} attempts: ${error.message}`);
         }
-        
+
         // Wait before retry
         await new Promise(resolve => setTimeout(resolve, 1000));
         attempts++;
@@ -443,7 +443,7 @@ function useAsyncExtraction(baseUrl) {
 
     try {
       const extractor = new ExcelExtractor(baseUrl);
-      
+
       const result = await extractor.extractData(
         sharePointUrl,
         sheetNames,
@@ -484,16 +484,16 @@ function ExtractionComponent() {
       <button onClick={handleExtract} disabled={loading}>
         {loading ? 'Extracting...' : 'Extract Data'}
       </button>
-      
+
       {loading && (
         <div>
           <div>Progress: {progress}%</div>
           <progress value={progress} max={100} />
         </div>
       )}
-      
+
       {error && <div>Error: {error}</div>}
-      
+
       {data && <div>Extraction completed! {JSON.stringify(data, null, 2)}</div>}
     </div>
   );
@@ -517,21 +517,21 @@ function ExtractionComponent() {
 ```javascript
 async function robustExtraction(sharePointUrl, sheetNames, config, maxRetries = 3) {
   let lastError;
-  
+
   for (let retry = 0; retry < maxRetries; retry++) {
     try {
       const extractor = new ExcelExtractor('https://your-api-url');
       return await extractor.extractData(sharePointUrl, sheetNames, config);
-      
+
     } catch (error) {
       lastError = error;
-      
+
       // Don't retry for these errors
       if (error.message.includes('SharePoint file not found') ||
           error.message.includes('Invalid configuration')) {
         throw error;
       }
-      
+
       // Wait before retry (exponential backoff)
       if (retry < maxRetries - 1) {
         const waitTime = Math.pow(2, retry) * 1000; // 1s, 2s, 4s
@@ -540,7 +540,7 @@ async function robustExtraction(sharePointUrl, sheetNames, config, maxRetries = 
       }
     }
   }
-  
+
   throw new Error(`Failed after ${maxRetries} retries: ${lastError.message}`);
 }
 ```
@@ -599,7 +599,7 @@ class ExcelExtractor {
   async extractData(sharePointUrl, sheetNames, config, onProgress = null) {
     this.log('Starting extraction for:', sharePointUrl);
     this.log('Config:', JSON.stringify(config, null, 2));
-    
+
     // ... rest of implementation with debug logging
   }
 }
@@ -615,10 +615,10 @@ async function getJobStats(baseUrl) {
 
 // List all your jobs
 async function listJobs(baseUrl, status = null) {
-  const url = status 
+  const url = status
     ? `${baseUrl}/api/v1/jobs?status=${status}`
     : `${baseUrl}/api/v1/jobs`;
-  
+
   const response = await fetch(url);
   return await response.json();
 }
