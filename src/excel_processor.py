@@ -643,9 +643,9 @@ class ExcelProcessor:
             if field_positions:
                 data["_field_positions"] = field_positions
 
-            # Link images to image fields if images are available
-            if images and data:
-                self._link_images_to_key_value_pairs(data, images)
+            # Link images to image fields, or use text fallback if no images available
+            if data:
+                self._link_images_to_key_value_pairs(data, images or [])
 
         except Exception as e:
             raise ExcelProcessingError(f"Failed to extract key-value pairs: {e}")
@@ -1648,8 +1648,11 @@ class ExcelProcessor:
         self, data: Dict[str, Any], images: List[Dict[str, Any]]
     ) -> None:
         """Link images to key-value pairs based on exact cell position information."""
-        if not images or not data:
+        if not data:
             return
+            
+        # Even if no images are available, we should still process text_fallback values
+        # This handles cases where fields are marked as "image" type but contain text
 
         # Get field position metadata if available
         field_positions = data.get("_field_positions", {})
@@ -1659,14 +1662,16 @@ class ExcelProcessor:
             if field in data and data[field] is None:
                 # Look for an image at this exact position
                 image_data = self._get_image_at_position(
-                    position["row"], position["col"], images
+                    position["row"], position["col"], images or []
                 )
+                
                 if image_data:
                     data[field] = image_data
                 else:
                     # No image found at the exact position, use text fallback if available
                     # This handles cases where a field is marked as "image" type but contains text
                     text_fallback = position.get("text_fallback")
+                    
                     if text_fallback is not None:
                         data[field] = text_fallback
                         logger.debug(
