@@ -83,7 +83,7 @@ class ExcelRangeExporter:
         try:
             # Load workbook locally
             logger.info(f"Loading Excel workbook: {workbook_path}")
-            wb = load_workbook(workbook_path, data_only=False)
+            wb = load_workbook(workbook_path, data_only=True)
             
             # Get available worksheets for validation
             worksheets = wb.sheetnames

@@ -81,7 +81,7 @@ class ExcelProcessor:
 
         try:
             # Try to load workbook to validate format
-            self.workbook = load_workbook(self.file_path, data_only=False)
+            self.workbook = load_workbook(self.file_path, data_only=True)
             logger.info(f"Successfully loaded Excel file: {self.file_path}")
             
             # Initialize image cache for file-based workbooks too
@@ -111,7 +111,7 @@ class ExcelProcessor:
             memory_file = io.BytesIO(file_content)
 
             # Load workbook from the in-memory file
-            self.workbook = load_workbook(memory_file, data_only=False)
+            self.workbook = load_workbook(memory_file, data_only=True)
 
             # Keep reference to the memory file to prevent it from being garbage collected
             self._memory_file = memory_file
