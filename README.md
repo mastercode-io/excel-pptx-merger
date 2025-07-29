@@ -6,6 +6,8 @@ A robust Python service that extracts data from Excel files and merges it into P
 
 - **Dynamic Excel Data Extraction**: Flexible table detection with configurable search criteria
 - **PowerPoint Template Processing**: Jinja-style merge field replacement (`{{field_name}}`)
+- **Dynamic Slide Duplication**: Create multiple slides from templates based on list data
+- **Slide Filtering**: Include or exclude specific slides in final output
 - **Multiple Data Orientations**: Support for horizontal (key-value) and vertical (table) data layouts
 - **Image Handling**: Extract images from Excel and replace image placeholders in PowerPoint with aspect ratio preservation
 - **Explicit Field Type Support**: Configure field types (text, image, number, date, boolean) for precise data handling
@@ -246,6 +248,59 @@ See the `config/default_config.json` file for comprehensive examples of:
 - Table data extraction
 - Image field configuration
 - Search criteria options
+
+### PowerPoint Features Configuration
+
+#### Dynamic Slide Duplication
+
+Create multiple slides from a template slide based on list data:
+
+```json
+{
+  "global_settings": {
+    "powerpoint": {
+      "dynamic_slides": {
+        "enabled": true,
+        "template_marker": "{{#list:",
+        "remove_template_slides": true
+      }
+    }
+  }
+}
+```
+
+**Template slide example:**
+```
+{{#list:products}}
+Product: {{name}}
+Price: {{price}}
+Stock: {{quantity}}
+```
+
+This will create one slide for each item in the "products" list, replacing merge fields with data from each item.
+
+#### Slide Filtering
+
+Control which slides appear in the final output:
+
+```json
+{
+  "global_settings": {
+    "powerpoint": {
+      "slide_filter": {
+        "include_slides": [1, 3, 5],  // Only include these slides
+        "exclude_slides": [2, 4]      // Or exclude specific slides
+      }
+    }
+  }
+}
+```
+
+**Notes:**
+- Slide numbers are 1-based (matching PowerPoint UI)
+- If `include_slides` is specified, only those slides are included
+- If only `exclude_slides` is specified, all slides except those are included
+- Empty configuration includes all slides
 
 ## 🔄 Processing Flow
 

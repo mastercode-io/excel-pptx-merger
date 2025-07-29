@@ -60,6 +60,11 @@ app.config["MAX_FORM_MEMORY_SIZE"] = (
     10 * 1024 * 1024
 )  # 10MB for form fields (was 500KB default)
 
+# Add request logging middleware
+@app.before_request
+def log_request():
+    logger.info(f"🔧 REQUEST: {request.method} {request.path} - Content-Type: {request.content_type}")
+
 
 def setup_logging() -> None:
     """Setup logging configuration."""
@@ -240,6 +245,7 @@ def health() -> Tuple[Dict[str, Any], int]:
 # Job Queue Endpoints
 @app.route("/api/v1/jobs/start", methods=["POST"])
 def start_job():
+    logger.info("🔧 ENTRY: start_job() called - /api/v1/jobs/start endpoint")
     """Start a new async job for any supported endpoint."""
     try:
         # Clean up expired jobs first
@@ -414,6 +420,7 @@ def get_job_stats():
 @app.route("/api/v1/merge", methods=["POST"])
 def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
     """Main file processing endpoint with enhanced image support."""
+    logger.info("🔧 ENTRY: merge_files() called - /api/v1/merge endpoint")
 
     # CRITICAL REQUEST TRACKING
     logger.info("🌟" * 50)
@@ -1061,7 +1068,10 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         try:
             output_filename = f"merged_{os.path.basename(pptx_file.filename)}"
 
+            logger.info(f"🔧 DEBUG MAIN: save_files = {save_files}")
+            
             if save_files:
+                logger.info("🔧 DEBUG MAIN: Taking FILE-BASED processing path")
                 # File-based processing: save to disk
                 merged_file_path = temp_manager.storage.get_output_path(
                     temp_dir, output_filename
@@ -1071,10 +1081,14 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 os.makedirs(os.path.dirname(merged_file_path), exist_ok=True)
 
                 # Merge data into PowerPoint and save
+                logger.info("🔧 DEBUG MAIN: About to call merge_data() - FILE SAVE path")
+                logger.info(f"🔧 DEBUG MAIN: merged_file_path = {merged_file_path}")
+                logger.info(f"🔧 DEBUG MAIN: extracted_data keys = {list(extracted_data.keys()) if extracted_data else None}")
                 merged_file_path = pptx_processor.merge_data(
-                    extracted_data, merged_file_path, images
+                    extracted_data, merged_file_path, images, extraction_config
                 )
             else:
+                logger.info("🔧 DEBUG MAIN: Taking MEMORY-BASED processing path")
                 # Memory-based processing: create in-memory file
                 import tempfile
 
@@ -1084,8 +1098,11 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                     merged_file_path = tmp_file.name
 
                 # Merge data into PowerPoint and save to temporary file
+                logger.info("🔧 DEBUG MAIN: About to call merge_data() - TEMP FILE path")
+                logger.info(f"🔧 DEBUG MAIN: merged_file_path = {merged_file_path}")
+                logger.info(f"🔧 DEBUG MAIN: extracted_data keys = {list(extracted_data.keys()) if extracted_data else None}")
                 merged_file_path = pptx_processor.merge_data(
-                    extracted_data, merged_file_path, images
+                    extracted_data, merged_file_path, images, extraction_config
                 )
 
             # Verify the merged file exists and ensure it's an absolute path
@@ -1188,11 +1205,13 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 cleanup_thread.daemon = True
                 cleanup_thread.start()
 
+            logger.info("🔧 EXIT: merge_files() completed successfully - returning response")
             return response
         finally:
             pptx_processor.close()
 
     except Exception as e:
+        logger.error(f"🔧 EXIT: merge_files() failed with exception: {e}")
         logger.exception(f"Error in merge endpoint: {e}")
         return jsonify({"error": str(e)}), 500
 
@@ -2317,6 +2336,7 @@ def save_debug_info(extracted_data, images, temp_dir, base_filename):
 # Google Cloud Function entry point
 @functions_framework.http
 def excel_pptx_merger(request):
+    logger.info("🔧 ENTRY: excel_pptx_merger() called - Google Cloud Function entry point")
     """Google Cloud Function entry point with enhanced image storage support.
 
     This function handles HTTP requests to the Cloud Function, supporting both
@@ -2595,7 +2615,7 @@ def merge_cli(
         if debug_range_images:
             setup_range_image_debug_mode(enabled=True, level=logging.DEBUG)
             # Reduce verbosity of other loggers when focusing on range images
-            logging.getLogger("src.pptx_processor").setLevel(logging.WARNING)
+            logging.getLogger("src.pptx_processor").setLevel(logging.INFO)
             logging.getLogger("PIL").setLevel(logging.WARNING)
             logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
@@ -2667,8 +2687,11 @@ def merge_cli(
                 output_file = f"merged_{os.path.basename(pptx_file)}"
 
             # Merge data into PowerPoint
+            logger.info("🔧 DEBUG MAIN: About to call merge_data() - CLI path")
+            logger.info(f"🔧 DEBUG MAIN: output_file = {output_file}")
+            logger.info(f"🔧 DEBUG MAIN: extracted_data keys = {list(extracted_data.keys()) if extracted_data else None}")
             merged_file_path = pptx_processor.merge_data(
-                extracted_data, output_file, images
+                extracted_data, output_file, images, extraction_config
             )
 
             click.echo(
@@ -2788,7 +2811,7 @@ def serve(host: str, port: int, debug: bool, debug_range_images: bool) -> None:
     if debug_range_images:
         setup_range_image_debug_mode(enabled=True, level=logging.DEBUG)
         # Reduce verbosity of other loggers when focusing on range images
-        logging.getLogger("src.pptx_processor").setLevel(logging.WARNING)
+        logging.getLogger("src.pptx_processor").setLevel(logging.INFO)
         logging.getLogger("PIL").setLevel(logging.WARNING)
         logging.getLogger("matplotlib").setLevel(logging.WARNING)
         logger.info("🖼️ Range Image Debug Mode: ENABLED")

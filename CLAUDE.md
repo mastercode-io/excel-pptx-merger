@@ -93,6 +93,8 @@ docker run -p 5000:5000 excel-pptx-merger:latest
 - **Multi-Environment Support**: Development, testing, and production configurations
 - **Centralized SharePoint Integration**: Unified SharePoint file access across all endpoints via SharePointFileHandler
 - **Robust Storage Layer**: Abstracted storage with Local/GCS backends and proper Content-Type handling
+- **Dynamic Slide Duplication**: Create multiple slides from templates based on list data with automatic field replacement
+- **Slide Filtering**: Include/exclude specific slides in final PowerPoint output
 
 ### Data Flow
 1. Excel files processed using pandas/openpyxl with configurable extraction rules
@@ -137,6 +139,43 @@ docker run -p 5000:5000 excel-pptx-merger:latest
 - **tests/**: Test files and fixtures
 - **docker/**: Docker configuration files
 - **docs/**: Technical documentation and integration guides
+
+## Development Best Practices
+
+### Feature Implementation Timeline
+**Target: 2-3 hours per feature implementation**
+
+#### Efficient Implementation Process (2-3 hours):
+1. **Initial Analysis (30 mins)**
+   - Thoroughly understand the problem before coding
+   - Identify library limitations early (e.g., python-pptx object model constraints)
+   - Create minimal test case to reproduce issue
+   - Review existing code patterns and architecture
+
+2. **Prototype Development (30 mins)**
+   - Build simplest possible working version
+   - Test core functionality in isolation
+   - Verify approach feasibility before full implementation
+   - Identify potential roadblocks early
+
+3. **Comprehensive Debugging Setup (30 mins)**
+   - Add all necessary logging upfront
+   - Create test cases for edge conditions
+   - Use systematic debugging instead of trial-and-error
+   - Implement proper error handling
+
+4. **Clean Implementation (1 hour)**
+   - Write the solution once, correctly
+   - Avoid incremental patches and workarounds
+   - Follow existing code patterns
+   - Test thoroughly before declaring complete
+
+#### Common Pitfalls to Avoid:
+- **Misidentifying root cause**: Spend time understanding the real problem
+- **Ignoring library limitations**: Check documentation for constraints
+- **Incremental fixes**: Design complete solution before implementing
+- **Insufficient logging**: Add comprehensive debugging from the start
+- **Poor testing**: Test edge cases and error conditions early
 
 ## Development Notes
 
@@ -230,6 +269,68 @@ Development mode saves debug information including extracted data and copies of 
 3. **Storage Layer Improvements**: Fixed GCS Content-Type handling and added Local/GCS abstraction
 4. **SharePoint Integration**: Centralized file handler for all endpoints
 5. **Code Reuse Architecture**: Zero duplication between sync/async processing paths
+
+### PowerPoint Processing Features
+
+#### Dynamic Slide Duplication
+Automatically create multiple slides from a template slide based on list data:
+
+**How it works:**
+1. Mark template slides with `{{#list:listname}}` in any text field
+2. System duplicates the slide for each item in the specified list
+3. Merge fields like `{{field_name}}` are replaced with list item data
+4. Original template slide is removed from final output
+
+**Configuration:**
+```json
+{
+  "global_settings": {
+    "powerpoint": {
+      "dynamic_slides": {
+        "enabled": true,
+        "template_marker": "{{#list:",
+        "remove_template_slides": true
+      }
+    }
+  }
+}
+```
+
+**Template Example:**
+```
+{{#list:products}}
+Product Name: {{name}}
+Price: {{price}}
+Description: {{description}}
+```
+
+**Technical Implementation:**
+- Two-pass processing to handle python-pptx object model limitations
+- Pass 1: Create dynamic slides and save to memory
+- Pass 2: Reload from memory and process merge fields
+- Handles multi-run text patterns (fields split by PowerPoint spell checker)
+
+#### Slide Filtering
+Control which slides appear in the final output:
+
+**Configuration:**
+```json
+{
+  "global_settings": {
+    "powerpoint": {
+      "slide_filter": {
+        "include_slides": [1, 3, 5],  // Only these slides
+        "exclude_slides": [2, 4]      // Exclude these slides
+      }
+    }
+  }
+}
+```
+
+**Notes:**
+- Slide numbers are 1-based (matching PowerPoint UI)
+- Include list takes precedence over exclude list
+- Empty configuration processes all slides
 
 ### Deployment Notes
 - **Production**: Uses memory-only processing with Local storage backend

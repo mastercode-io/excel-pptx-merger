@@ -10,8 +10,10 @@ from pptx.shapes.base import BaseShape
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from .utils.exceptions import PowerPointProcessingError
 from .utils.validation import validate_merge_fields
+from .utils.slide_utils import filter_slides, is_template_slide, extract_list_name
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # Force INFO level to ensure debug messages are visible
 
 
 class PowerPointProcessor:
@@ -116,18 +118,30 @@ class PowerPointProcessor:
         data: Dict[str, Any],
         output_path: str,
         images: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Merge data into the PowerPoint template and save to output path.
+        """Merge data into the PowerPoint template using two-pass processing.
+        
+        Pass 1: Create dynamic slides and save to memory
+        Pass 2: Reload from memory and process all content
 
         Args:
             data: Data to merge into the template
             output_path: Path to save the merged presentation
             images: Dictionary of images by sheet name
+            config: Configuration for PowerPoint processing
 
         Returns:
             Path to the merged presentation
         """
+        logger.info("🔧 DEBUG: ENTRY - merge_data() called with two-pass processing")
+        logger.info(f"🔧 DEBUG: ENTRY - data keys: {list(data.keys()) if data else None}")
+        logger.info(f"🔧 DEBUG: ENTRY - output_path: {output_path}")
+        logger.info(f"🔧 DEBUG: ENTRY - images provided: {images is not None}")
+        logger.info(f"🔧 DEBUG: ENTRY - config provided: {config is not None}")
+
         if not self.presentation:
+            logger.error("🔧 DEBUG: ERROR - No PowerPoint template loaded")
             raise PowerPointProcessingError("No presentation loaded")
 
         # Ensure output_path is an absolute path
@@ -140,38 +154,1609 @@ class PowerPointProcessor:
         logger.debug(f"Ensuring PowerPoint output directory exists: {output_dir}")
 
         try:
-            # Process each slide
-            for slide_idx, slide in enumerate(self.presentation.slides):
-                # logger.debug(f"Processing slide {slide_idx + 1}")  # Too verbose
-                self._process_slide(slide, data, images)
+            # Get PowerPoint configuration
+            powerpoint_config = (
+                config.get("global_settings", {}).get("powerpoint", {})
+                if config
+                else {}
+            )
+            logger.info(f"🔧 DEBUG: PowerPoint config loaded: {bool(powerpoint_config)}")
+            logger.info(f"🔧 DEBUG: Total slides in presentation: {len(list(self.presentation.slides))}")
 
-            # Validate and clean up before saving
-            self._validate_presentation_integrity()
-
-            # Final comprehensive cleanup to remove error attributes
-            final_cleanup_count = self._final_cleanup_presentation()
-            if final_cleanup_count > 0:
-                logger.info(
-                    f"Final cleanup removed {final_cleanup_count} error attributes"
-                )
-
-            # Save the merged presentation
+            # PASS 1: Create dynamic slides and save to memory
+            dynamic_slide_mapping = self._create_dynamic_slides_pass(data, powerpoint_config)
+            
+            # DEBUG: Log dynamic slide mapping state after Pass 1
+            logger.info(f"🔧 DEBUG: PASS 1 COMPLETED")
+            logger.info(f"🔧 DEBUG: Total slides after Pass 1: {len(list(self.presentation.slides))}")
+            logger.info(f"🔧 DEBUG: Dynamic slide mapping: {dynamic_slide_mapping}")
+            if dynamic_slide_mapping:
+                expected_dynamic_slides = list(dynamic_slide_mapping.keys())
+                logger.info(f"🔧 DEBUG: Expected dynamic slides in Pass 2: {expected_dynamic_slides}")
+            else:
+                logger.info(f"🔧 DEBUG: No dynamic slides detected in Pass 1")
+            
+            # PASS 2: Reload from memory and process all content
+            self._process_slides_pass(data, images, powerpoint_config, dynamic_slide_mapping)
+            
+            # Save final presentation
             self.presentation.save(output_path)
-            logger.info(f"Merged presentation saved to: {output_path}")
-
+            logger.info(f"Two-pass merged presentation saved to: {output_path}")
+            
             # Post-process the saved file to remove any remaining error attributes
             post_cleanup_count = self._post_process_xml_cleanup(output_path)
             if post_cleanup_count > 0:
                 logger.info(
-                    f"Post-processing removed {post_cleanup_count} error attributes from saved file"
+                    f"Post-processing removed {post_cleanup_count} additional error attributes"
                 )
-
+                
+            logger.info("🔧 DEBUG: EXIT - merge_data() completed successfully with two-pass processing")
             return output_path
 
         except Exception as e:
-            raise PowerPointProcessingError(
-                f"Failed to merge data into presentation: {e}"
+            logger.error(f"🔧 DEBUG: EXCEPTION - merge_data failed: {e}")
+            logger.error(f"🔧 DEBUG: EXCEPTION - Exception type: {type(e)}")
+            import traceback
+            logger.error(f"🔧 DEBUG: EXCEPTION - Traceback: {traceback.format_exc()}")
+            raise PowerPointProcessingError(f"Failed to merge data into presentation: {e}")
+
+    def _create_dynamic_slides_pass(self, data: Dict[str, Any], powerpoint_config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+        """Pass 1: Create dynamic slides only, no processing.
+        
+        Returns mapping of slide positions to list item info for Pass 2.
+        """
+        from io import BytesIO
+        
+        logger.info("🔧 DEBUG: PASS 1 - Starting dynamic slide creation")
+        dynamic_slide_mapping = {}
+        
+        # Check if dynamic slides are enabled
+        dynamic_enabled = powerpoint_config.get("dynamic_slides", {}).get("enabled", True)
+        if not dynamic_enabled:
+            logger.info("🔧 DEBUG: PASS 1 - Dynamic slides disabled, skipping")
+            return dynamic_slide_mapping
+        
+        # Build mapping during slide creation by modifying _process_dynamic_slides to return mapping
+        dynamic_slide_mapping = self._process_dynamic_slides_with_mapping(data, powerpoint_config)
+        
+        # Save presentation to memory
+        memory_file = BytesIO()
+        self.presentation.save(memory_file)
+        memory_file.seek(0)
+        logger.info("🔧 DEBUG: PASS 1 - Saved presentation to memory")
+        
+        # Store the memory file for Pass 2
+        self._memory_file = memory_file
+        
+        logger.info(f"🔧 DEBUG: PASS 1 - Created {len(dynamic_slide_mapping)} dynamic slide mappings")
+        return dynamic_slide_mapping
+
+    def _process_slides_pass(self, data: Dict[str, Any], images: Dict[str, Any], 
+                           powerpoint_config: Dict[str, Any], dynamic_slide_mapping: Dict[int, Dict[str, Any]]) -> None:
+        """Pass 2: Reload from memory and process all slides with fresh object model."""
+        from pptx import Presentation
+        
+        logger.info("🔧 DEBUG: PASS 2 - Starting content processing with fresh object model")
+        
+        # Reload presentation from memory to get fresh python-pptx object model
+        if hasattr(self, '_memory_file'):
+            self.presentation = Presentation(self._memory_file)
+            logger.info("🔧 DEBUG: PASS 2 - Reloaded presentation from memory with fresh object model")
+        else:
+            logger.warning("🔧 DEBUG: PASS 2 - No memory file found, using current presentation")
+        
+        # Apply slide filtering
+        logger.info("🔧 DEBUG: PASS 2 - Starting slide filtering...")
+        self._filter_slides(powerpoint_config)
+        logger.info(f"🔧 DEBUG: PASS 2 - Slides remaining after filtering: {len(list(self.presentation.slides))}")
+        
+        # Process all slides with fresh object model
+        slides = list(self.presentation.slides)
+        logger.info(f"🔧 DEBUG: PASS 2 - Total slides after filtering: {len(slides)}")
+        logger.info(f"🔧 DEBUG: PASS 2 - Expected dynamic slides at indices: {list(dynamic_slide_mapping.keys())}")
+        
+        # Debug: Check what content is actually at the mapped positions
+        for mapped_index in dynamic_slide_mapping.keys():
+            if mapped_index < len(slides):
+                slide_at_position = slides[mapped_index]
+                # Check if this slide has template markers or actual content
+                sample_text = ""
+                for shape in slide_at_position.shapes:
+                    if hasattr(shape, "text_frame") and shape.text_frame:
+                        for paragraph in shape.text_frame.paragraphs:
+                            for run in paragraph.runs:
+                                sample_text += run.text
+                                if len(sample_text) > 50:
+                                    break
+                            if len(sample_text) > 50:
+                                break
+                        if len(sample_text) > 50:
+                            break
+                logger.info(f"🔧 DEBUG: PASS 2 - Slide {mapped_index + 1} content sample: '{sample_text[:50]}...'")
+            else:
+                logger.warning(f"🔧 DEBUG: PASS 2 - Mapped index {mapped_index} is out of range (only {len(slides)} slides)")
+        
+        for i, slide in enumerate(slides):
+            if i in dynamic_slide_mapping:
+                # This is a dynamic slide - process with list context
+                mapping = dynamic_slide_mapping[i]
+                list_name = mapping['list_name']
+                item_index = mapping['item_index']
+                total_items = mapping['total_items']
+                item_data = mapping['item_data']
+                
+                # Create context for this list item using the stored data
+                context = self._create_list_item_context(
+                    item_data, item_index, total_items, data, 
+                    powerpoint_config.get("dynamic_slides", {})
+                )
+                
+                logger.info(f"🔧 DEBUG: PASS 2 - Processing dynamic slide {i+1} with list item {item_index + 1}/{total_items}")
+                logger.info(f"🔧 DEBUG: PASS 2 - Using item_data: {item_data}")
+                logger.info(f"🔧 DEBUG: PASS 2 - Context keys: {list(context.keys())}")
+                
+                # Process this slide with the list item context
+                self._process_slide_with_context(slide, context)
+            else:
+                # Regular slide - process normally
+                logger.info(f"🔧 DEBUG: PASS 2 - Processing regular slide {i+1}")
+                self._process_slide(slide, data, images)
+        
+        # Validate and clean up
+        self._validate_presentation_integrity()
+        
+        # Final cleanup
+        final_cleanup_count = self._final_cleanup_presentation()
+        if final_cleanup_count > 0:
+            logger.info(f"🔧 DEBUG: PASS 2 - Final cleanup removed {final_cleanup_count} error attributes")
+        
+        logger.info("🔧 DEBUG: PASS 2 - Content processing completed")
+
+    def _filter_slides(self, powerpoint_config: Dict[str, Any]) -> None:
+        """Filter slides by actually removing non-included slides from the presentation.
+
+        Args:
+            powerpoint_config: PowerPoint configuration
+        """
+        try:
+            slide_filter_config = powerpoint_config.get("slide_filter", {})
+            include_slides = slide_filter_config.get("include_slides", [])
+            exclude_slides = slide_filter_config.get("exclude_slides", [])
+
+            logger.info(
+                f"🔧 DEBUG _filter_slides: slide_filter_config = {slide_filter_config}"
             )
+            logger.info(f"🔧 DEBUG _filter_slides: include_slides = {include_slides}")
+            logger.info(f"🔧 DEBUG _filter_slides: exclude_slides = {exclude_slides}")
+            logger.info(
+                f"🔧 DEBUG _filter_slides: slides count before filtering = {len(list(self.presentation.slides))}"
+            )
+
+            # If no filtering configured, do nothing
+            if not include_slides and not exclude_slides:
+                logger.info(
+                    f"🔧 DEBUG _filter_slides: No filtering configured, keeping all slides"
+                )
+                return
+
+            slides_to_remove = []
+
+            # Determine which slides to remove
+            for i, slide in enumerate(self.presentation.slides):
+                slide_number = i + 1  # Convert to 1-based
+                should_remove = False
+
+                # If include list is specified, remove slides NOT in the list
+                if include_slides:
+                    if slide_number not in include_slides:
+                        should_remove = True
+                        logger.info(
+                            f"🔧 DEBUG: Slide {slide_number} not in include list, will remove"
+                        )
+
+                # If exclude list is specified, remove slides IN the list
+                elif exclude_slides:
+                    if slide_number in exclude_slides:
+                        should_remove = True
+                        logger.info(
+                            f"🔧 DEBUG: Slide {slide_number} in exclude list, will remove"
+                        )
+
+                if should_remove:
+                    slides_to_remove.append((i, slide))
+
+            # Remove slides (iterate backwards to avoid index issues)
+            for slide_index, slide in reversed(slides_to_remove):
+                try:
+                    logger.info(f"🔧 DEBUG: Removing slide {slide_index + 1}")
+                    slide_id = slide.slide_id
+                    self.presentation.slides._sldIdLst.remove(
+                        self.presentation.slides._sldIdLst.xpath(
+                            f'//p:sldId[@id="{slide_id}"]'
+                        )[0]
+                    )
+                    logger.info(
+                        f"🔧 DEBUG: Successfully removed slide {slide_index + 1}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"🔧 DEBUG: ERROR removing slide {slide_index + 1}: {e}"
+                    )
+
+            final_count = len(list(self.presentation.slides))
+            logger.info(
+                f"🔧 DEBUG _filter_slides: slides count after filtering = {final_count}"
+            )
+            logger.info(
+                f"Slide filtering: removed {len(slides_to_remove)} slides, {final_count} slides remaining"
+            )
+
+        except Exception as e:
+            logger.error(f"Error filtering slides: {e}")
+
+    def _process_dynamic_slides(
+        self, data: Dict[str, Any], powerpoint_config: Dict[str, Any]
+    ) -> set:
+        """Process template slides and create duplicates from list data.
+
+        Args:
+            data: The merge data containing lists for duplication
+            powerpoint_config: PowerPoint configuration
+        """
+        processed_slide_ids = set()
+
+        try:
+            dynamic_config = powerpoint_config.get("dynamic_slides", {})
+            template_marker = dynamic_config.get("template_marker", "{{#list:")
+            remove_template_slides = dynamic_config.get("remove_template_slides", True)
+
+            logger.info(
+                f"🔧 DEBUG _process_dynamic_slides: dynamic_config = {dynamic_config}"
+            )
+            logger.info(
+                f"🔧 DEBUG _process_dynamic_slides: template_marker = {template_marker}"
+            )
+            logger.info(
+                f"🔧 DEBUG _process_dynamic_slides: remove_template_slides = {remove_template_slides}"
+            )
+
+            # Find template slides (iterate backwards to avoid index issues when removing)
+            template_slides_info = []
+            slides = list(self.presentation.slides)
+
+            for i in range(len(slides) - 1, -1, -1):
+                slide = slides[i]
+                logger.info(f"🔧 DEBUG: Checking slide {i + 1} for template marker")
+                if is_template_slide(slide, template_marker):
+                    logger.info(f"🔧 DEBUG: Slide {i + 1} IS a template slide!")
+                    list_name = extract_list_name(slide, template_marker)
+                    logger.info(f"🔧 DEBUG: Extracted list name: {list_name}")
+                    if list_name:
+                        list_data = self._find_list_in_data(data, list_name)
+                        if isinstance(list_data, list) and list_data:
+                            template_slides_info.append(
+                                (i, slide, list_name, list_data)
+                            )
+
+            # Process each template slide (in forward order for proper indexing)
+            # Reverse the list since we built it backwards
+            template_slides_info.reverse()
+
+            # Keep track of slide index adjustments
+            index_offset = 0
+
+            for (
+                original_slide_index,
+                template_slide,
+                list_name,
+                list_data,
+            ) in template_slides_info:
+                # Adjust slide index based on previous insertions
+                slide_index = original_slide_index + index_offset
+
+                logger.info(
+                    f"Processing template slide {original_slide_index + 1} for list '{list_name}' with {len(list_data)} items"
+                )
+
+                # Track this template slide as processed
+                processed_slide_ids.add(template_slide.slide_id)
+
+                # Store the slides to be inserted
+                new_slides = []
+
+                # Create duplicates for each item in the list
+                for item_index, item in enumerate(list_data):
+                    # Use the enhanced duplicate_slide function from slide_utils
+                    from .utils.slide_utils import duplicate_slide
+
+                    # For now, use simple duplication but insert in the right place
+                    new_slide = self._duplicate_slide_enhanced(
+                        template_slide, slide_index + item_index
+                    )
+
+                    # Create context for this list item
+                    item_context = self._create_list_item_context(
+                        item, item_index, len(list_data), data, dynamic_config
+                    )
+
+                    # Process the dynamic slide using context-specific processing
+                    # This handles direct field names and template marker removal
+                    logger.info(f"🔧 DEBUG: About to process dynamic slide for {list_name}[{item_index}]")
+                    self._process_slide_with_context(new_slide, item_context)
+                    logger.info(f"🔧 DEBUG: Completed processing dynamic slide for {list_name}[{item_index}]")
+
+                    new_slides.append(new_slide)
+                    # Track the new slide as processed to prevent re-processing in main loop
+                    processed_slide_ids.add(new_slide.slide_id)
+                    logger.info(f"🔧 DEBUG: Created slide for {list_name}[{item_index}], added ID {new_slide.slide_id} to processed set")
+
+                # Update index offset for next template slide
+                index_offset += len(new_slides)
+
+                # Remove the original template slide if configured
+                if remove_template_slides and new_slides:
+                    logger.info(
+                        f"🔧 DEBUG: Attempting to remove original template slide {original_slide_index + 1}"
+                    )
+                    try:
+                        # Use the original template slide reference, not position calculation
+                        # The template slide hasn't moved yet - new slides are added at the end
+                        slide_id = template_slide.slide_id
+
+                        self.presentation.slides._sldIdLst.remove(
+                            self.presentation.slides._sldIdLst.xpath(
+                                f'//p:sldId[@id="{slide_id}"]'
+                            )[0]
+                        )
+
+                        # Adjust offset since we removed a slide
+                        index_offset -= 1
+
+                        logger.info(
+                            f"🔧 DEBUG: Successfully removed template slide {original_slide_index + 1}"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"🔧 DEBUG: ERROR removing template slide {original_slide_index + 1}: {e}"
+                        )
+                        logger.warning(f"Could not remove template slide: {e}")
+
+            if template_slides_info:
+                logger.info(f"Processed {len(template_slides_info)} template slides")
+            else:
+                logger.info(
+                    "🔧 DEBUG _process_dynamic_slides: No template slides found"
+                )
+
+            logger.info(f"🔧 DEBUG _process_dynamic_slides: Completed successfully")
+
+            return processed_slide_ids
+
+        except Exception as e:
+            logger.error(f"🔧 DEBUG _process_dynamic_slides: ERROR - {e}")
+            logger.error(f"Error processing dynamic slides: {e}")
+            return processed_slide_ids
+
+    def _process_dynamic_slides_with_mapping(self, data: Dict[str, Any], powerpoint_config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+        """Process template slides and create duplicates while tracking mapping for Pass 2.
+
+        Args:
+            data: The merge data containing lists for duplication
+            powerpoint_config: PowerPoint configuration
+            
+        Returns:
+            Dictionary mapping slide indices to list item info for Pass 2
+        """
+        dynamic_slide_mapping = {}
+        
+        try:
+            from .utils.slide_utils import is_template_slide, extract_list_name
+
+            dynamic_config = powerpoint_config.get("dynamic_slides", {})
+            template_marker = dynamic_config.get("template_marker", "{{#list:")
+            remove_template_slides = dynamic_config.get("remove_template_slides", True)
+
+            logger.info(f"🔧 DEBUG: Processing dynamic slides with mapping - template_marker = {template_marker}")
+
+            # Find template slides (iterate backwards to avoid index issues when removing)
+            template_slides_info = []
+            slides = list(self.presentation.slides)
+
+            for i in range(len(slides) - 1, -1, -1):
+                slide = slides[i]
+                logger.info(f"🔧 DEBUG: Checking slide {i + 1} for template marker")
+                if is_template_slide(slide, template_marker):
+                    logger.info(f"🔧 DEBUG: Slide {i + 1} IS a template slide!")
+                    list_name = extract_list_name(slide, template_marker)
+                    logger.info(f"🔧 DEBUG: Extracted list name: {list_name}")
+                    if list_name:
+                        list_data = self._find_list_in_data(data, list_name)
+                        if isinstance(list_data, list) and list_data:
+                            template_slides_info.append((i, slide, list_name, list_data))
+
+            # Process each template slide (in forward order for proper indexing)
+            template_slides_info.reverse()
+
+            # Keep track of slide index adjustments
+            index_offset = 0
+
+            # Track all created slides for final mapping calculation
+            created_slides_info = []
+
+            for original_slide_index, template_slide, list_name, list_data in template_slides_info:
+                # Adjust slide index based on previous insertions
+                slide_index = original_slide_index + index_offset
+
+                logger.info(f"🔧 DEBUG: Processing template slide {original_slide_index + 1} for list '{list_name}' with {len(list_data)} items")
+
+                # Create duplicates for each item in the list  
+                for item_index, item in enumerate(list_data):
+                    logger.info(f"🔧 DEBUG: Creating slide {item_index + 1}/{len(list_data)} for {list_name}[{item_index}]")
+                    
+                    # Calculate where the new slide will be positioned
+                    new_slide_position = slide_index + item_index
+                    
+                    try:
+                        # Use the enhanced duplicate_slide function
+                        new_slide = self._duplicate_slide_enhanced(template_slide, new_slide_position)
+                        logger.info(f"🔧 DEBUG: Successfully duplicated slide at position {new_slide_position}")
+                        
+                        # Track this slide for final mapping calculation
+                        created_slides_info.append({
+                            'position': new_slide_position,
+                            'list_name': list_name,
+                            'item_index': item_index,
+                            'total_items': len(list_data),
+                            'item_data': item,
+                            'template_slide_index': original_slide_index
+                        })
+                        
+                    except Exception as e:
+                        logger.error(f"🔧 DEBUG: ERROR duplicating slide for {list_name}[{item_index}]: {e}")
+                        continue
+
+                # Update index offset for next template slide
+                index_offset += len(list_data)
+
+                # Remove the original template slide if configured
+                if remove_template_slides:
+                    logger.info(f"🔧 DEBUG: Attempting to remove original template slide {original_slide_index + 1}")
+                    try:
+                        slide_id = template_slide.slide_id
+                        self.presentation.slides._sldIdLst.remove(
+                            self.presentation.slides._sldIdLst.xpath(f'//p:sldId[@id="{slide_id}"]')[0]
+                        )
+                        # Adjust offset since we removed a slide
+                        index_offset -= 1
+                        
+                        logger.info(f"🔧 DEBUG: Successfully removed template slide {original_slide_index + 1}")
+                    except Exception as e:
+                        logger.error(f"🔧 DEBUG: ERROR removing template slide {original_slide_index + 1}: {e}")
+
+            # Build final mapping with correct positions after all operations
+            for slide_info in created_slides_info:
+                # The final position is simply the position where the slide was created
+                # No adjustment needed - slides retain their positions after template removal
+                final_position = slide_info['position']
+                
+                # Add to mapping for Pass 2
+                dynamic_slide_mapping[final_position] = {
+                    'list_name': slide_info['list_name'],
+                    'item_index': slide_info['item_index'],
+                    'total_items': slide_info['total_items'],
+                    'item_data': slide_info['item_data'],
+                    'is_dynamic': True
+                }
+                
+                logger.info(f"🔧 DEBUG: Final mapping - slide {final_position + 1} = {slide_info['list_name']}[{slide_info['item_index']}]")
+
+            logger.info(f"🔧 DEBUG: Created {len(dynamic_slide_mapping)} dynamic slides with mapping")
+            logger.info(f"🔧 DEBUG: Final mapping: {dynamic_slide_mapping}")
+            
+            return dynamic_slide_mapping
+
+        except Exception as e:
+            logger.error(f"🔧 DEBUG: Error processing dynamic slides with mapping: {e}")
+            import traceback
+            logger.error(f"🔧 DEBUG: Traceback: {traceback.format_exc()}")
+            return dynamic_slide_mapping
+
+    def _find_list_in_data(
+        self, data: Dict[str, Any], list_name: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Recursively find a list in nested data structure.
+
+        Args:
+            data: The data dictionary to search in
+            list_name: The name of the list to find
+
+        Returns:
+            The list data if found, None otherwise
+        """
+        try:
+            # Check at current level
+            if list_name in data:
+                return data[list_name]
+
+            # Recursively search in nested dictionaries
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    result = self._find_list_in_data(value, list_name)
+                    if result is not None:
+                        return result
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error finding list '{list_name}' in data: {e}")
+            return None
+
+    def _is_dynamic_slide(self, slide) -> bool:
+        """Check if a slide contains dynamic slide markers ({{#list:...}}).
+        
+        Args:
+            slide: The slide to check
+            
+        Returns:
+            True if the slide contains dynamic markers, False otherwise
+        """
+        try:
+            # Check all text shapes in the slide
+            for shape in slide.shapes:
+                if hasattr(shape, "text_frame") and shape.text_frame:
+                    for paragraph in shape.text_frame.paragraphs:
+                        for run in paragraph.runs:
+                            if "{{#list:" in run.text:
+                                return True
+                elif shape.shape_type == MSO_SHAPE_TYPE.TABLE:
+                    # Check table cells for dynamic markers
+                    for row in shape.table.rows:
+                        for cell in row.cells:
+                            if hasattr(cell, "text_frame") and cell.text_frame:
+                                for paragraph in cell.text_frame.paragraphs:
+                                    for run in paragraph.runs:
+                                        if "{{#list:" in run.text:
+                                            return True
+            return False
+        except Exception as e:
+            logger.error(f"Error checking if slide is dynamic: {e}")
+            return False
+
+    def _extract_dynamic_info(self, slide) -> tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+        """Extract list name and data from a dynamic slide.
+        
+        Args:
+            slide: The slide containing dynamic markers
+            
+        Returns:
+            Tuple of (list_name, list_data) or (None, None) if not found
+        """
+        try:
+            import re
+            
+            # Pattern to match {{#list:listname}}
+            pattern = r'\{\{#list:([^}]+)\}\}'
+            
+            # Check all text shapes in the slide
+            for shape in slide.shapes:
+                if hasattr(shape, "text_frame") and shape.text_frame:
+                    for paragraph in shape.text_frame.paragraphs:
+                        for run in paragraph.runs:
+                            match = re.search(pattern, run.text)
+                            if match:
+                                list_name = match.group(1).strip()
+                                return list_name, None  # Data will be found separately
+                elif shape.shape_type == MSO_SHAPE_TYPE.TABLE:
+                    # Check table cells for dynamic markers
+                    for row in shape.table.rows:
+                        for cell in row.cells:
+                            if hasattr(cell, "text_frame") and cell.text_frame:
+                                for paragraph in cell.text_frame.paragraphs:
+                                    for run in paragraph.runs:
+                                        match = re.search(pattern, run.text)
+                                        if match:
+                                            list_name = match.group(1).strip()
+                                            return list_name, None
+            return None, None
+        except Exception as e:
+            logger.error(f"Error extracting dynamic info from slide: {e}")
+            return None, None
+
+    def _process_dynamic_slide_sequence(
+        self, start_index: int, list_name: str, list_data: List[Dict[str, Any]], 
+        data: Dict[str, Any], images: Dict[str, Any]
+    ) -> int:
+        """Process a sequence of dynamic slides with their corresponding list item contexts.
+        
+        Args:
+            start_index: The index of the first dynamic slide in the sequence
+            list_name: The name of the list being processed
+            list_data: The list data containing items for each slide
+            data: The complete data dictionary for parent/root context
+            images: Images dictionary for processing
+            
+        Returns:
+            Number of slides processed in the sequence
+        """
+        try:
+            slides = list(self.presentation.slides)
+            slides_processed = 0
+            
+            logger.info(f"🔧 DEBUG: Processing dynamic sequence for '{list_name}' with {len(list_data)} items")
+            
+            # Process each slide in the sequence with corresponding list item context
+            for item_index, item_data in enumerate(list_data):
+                slide_index = start_index + item_index
+                
+                # Check if we have a slide at this index
+                if slide_index >= len(slides):
+                    logger.warning(f"Dynamic slide sequence expects slide {slide_index + 1}, but only {len(slides)} slides exist")
+                    break
+                    
+                slide = slides[slide_index]
+                logger.info(f"🔧 DEBUG: Processing dynamic slide {slide_index + 1} with item {item_index + 1}/{len(list_data)}")
+                
+                # Create context for this list item
+                item_context = self._create_list_item_context(
+                    item_data, item_index, len(list_data), data
+                )
+                
+                # Process the slide with the item-specific context
+                self._process_slide_with_enhanced_context(slide, item_context, images)
+                slides_processed += 1
+                
+            logger.info(f"🔧 DEBUG: Completed processing {slides_processed} dynamic slides for '{list_name}'")
+            return slides_processed
+            
+        except Exception as e:
+            logger.error(f"Error processing dynamic slide sequence: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return 0
+
+    def _process_slide_with_enhanced_context(
+        self, slide, context: Dict[str, Any], images: Dict[str, Any]
+    ) -> None:
+        """Process a slide with enhanced context handling for dynamic slides.
+        
+        This method:
+        1. Removes template markers ({{#list:...}})
+        2. Replaces merge fields using context data
+        3. Handles special variables and context navigation
+        
+        Args:
+            slide: The slide to process
+            context: The context data for field replacement
+            images: Images dictionary for image processing
+        """
+        try:
+            logger.info(f"🔧 DEBUG: Processing slide with enhanced context, keys: {list(context.keys())}")
+            
+            # Process all shapes in the slide
+            for shape in slide.shapes:
+                if hasattr(shape, "text_frame") and shape.text_frame:
+                    self._process_text_shape_with_enhanced_context(shape, context)
+                elif shape.shape_type == MSO_SHAPE_TYPE.TABLE:
+                    self._process_table_shape_with_enhanced_context(shape, context)
+                elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                    # For image shapes, we still use the existing image processing
+                    # but could be enhanced in the future for context-aware images
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"Error processing slide with enhanced context: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+
+    def _process_text_shape_with_enhanced_context(
+        self, shape, context: Dict[str, Any]
+    ) -> None:
+        """Process text shape with enhanced context handling.
+        
+        Args:
+            shape: The text shape to process
+            context: The context data for field replacement
+        """
+        try:
+            import re
+            
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    original_text = run.text
+                    logger.info(f"🔧 DEBUG: Processing text: '{original_text[:100]}'")
+                    
+                    # Step 1: Remove template markers ({{#list:...}})
+                    template_pattern = r'\{\{#list:[^}]+\}\}'
+                    # Check for template markers before removal
+                    template_matches = re.findall(template_pattern, original_text)
+                    if template_matches:
+                        logger.info(f"🔧 DEBUG: Found template markers to remove: {template_matches}")
+                    
+                    run.text = re.sub(template_pattern, "", run.text)
+                    
+                    # Verify template markers were removed
+                    remaining_templates = re.findall(template_pattern, run.text)
+                    if remaining_templates:
+                        logger.warning(f"🔧 DEBUG: Template markers still present after removal: {remaining_templates}")
+                    elif template_matches:
+                        logger.info(f"🔧 DEBUG: Successfully removed template markers from run")
+                    
+                    # Step 2: Replace merge fields using context
+                    run.text = self._replace_merge_fields_with_context(run.text, context)
+                    
+                    if original_text != run.text:
+                        logger.info(f"🔧 DEBUG: Text replaced: '{original_text[:50]}...' -> '{run.text[:50]}...'")
+                        
+        except Exception as e:
+            logger.error(f"Error processing text shape with enhanced context: {e}")
+
+    def _process_table_shape_with_enhanced_context(
+        self, shape, context: Dict[str, Any]
+    ) -> None:
+        """Process table shape with enhanced context handling.
+        
+        Args:
+            shape: The table shape to process
+            context: The context data for field replacement
+        """
+        try:
+            import re
+            
+            for row in shape.table.rows:
+                for cell in row.cells:
+                    if hasattr(cell, "text_frame") and cell.text_frame:
+                        for paragraph in cell.text_frame.paragraphs:
+                            for run in paragraph.runs:
+                                original_text = run.text
+                                
+                                # Step 1: Remove template markers
+                                template_pattern = r'\{\{#list:[^}]+\}\}'
+                                # Check for template markers before removal
+                                template_matches = re.findall(template_pattern, original_text)
+                                if template_matches:
+                                    logger.info(f"🔧 DEBUG: Found table template markers to remove: {template_matches}")
+                                
+                                run.text = re.sub(template_pattern, "", run.text)
+                                
+                                # Verify template markers were removed from table cell
+                                remaining_templates = re.findall(template_pattern, run.text)
+                                if remaining_templates:
+                                    logger.warning(f"🔧 DEBUG: Table template markers still present after removal: {remaining_templates}")
+                                elif template_matches:
+                                    logger.info(f"🔧 DEBUG: Successfully removed table template markers from run")
+                                
+                                # Step 2: Replace merge fields using context
+                                run.text = self._replace_merge_fields_with_context(run.text, context)
+                                
+                                if original_text != run.text:
+                                    logger.info(f"🔧 DEBUG: Table cell text replaced: '{original_text[:30]}...' -> '{run.text[:30]}...'")
+                                    
+        except Exception as e:
+            logger.error(f"Error processing table shape with enhanced context: {e}")
+
+    def _replace_merge_fields_with_context(self, text: str, context: Dict[str, Any]) -> str:
+        """Replace merge fields in text using the provided context.
+        
+        Args:
+            text: The text containing merge fields
+            context: The context data for field replacement
+            
+        Returns:
+            Text with merge fields replaced
+        """
+        try:
+            import re
+            
+            # Pattern to match {{field_name}} but not {{#list:...}}
+            pattern = r'\{\{(?!#list:)([^}]+)\}\}'
+            
+            def replace_field(match):
+                field_name = match.group(1).strip()
+                logger.info(f"🔧 DEBUG: Replacing field: '{field_name}'")
+                
+                # Handle special variables
+                if field_name.startswith('$'):
+                    if field_name in context:
+                        value = context[field_name]
+                        logger.info(f"🔧 DEBUG: Special variable '{field_name}' = '{value}'")
+                        return str(value) if value is not None else ""
+                
+                # Handle parent context (../field)
+                if field_name.startswith('../'):
+                    parent_field = field_name[3:]  # Remove '../'
+                    if '..' in context and isinstance(context['..'], dict):
+                        parent_context = context['..']
+                        if parent_field in parent_context:
+                            value = parent_context[parent_field]
+                            logger.info(f"🔧 DEBUG: Parent field '{field_name}' = '{value}'")
+                            return str(value) if value is not None else ""
+                
+                # Handle root context ($root.field)
+                if field_name.startswith('$root.'):
+                    root_field = field_name[6:]  # Remove '$root.'
+                    if '$root' in context and isinstance(context['$root'], dict):
+                        root_context = context['$root']
+                        if root_field in root_context:
+                            value = root_context[root_field]
+                            logger.info(f"🔧 DEBUG: Root field '{field_name}' = '{value}'")
+                            return str(value) if value is not None else ""
+                
+                # Handle regular fields in current context
+                if field_name in context:
+                    value = context[field_name]
+                    logger.info(f"🔧 DEBUG: Context field '{field_name}' = '{value}'")
+                    return str(value) if value is not None else ""
+                
+                # Handle nested field access (field.subfield)
+                if '.' in field_name:
+                    parts = field_name.split('.')
+                    current = context
+                    for part in parts:
+                        if isinstance(current, dict) and part in current:
+                            current = current[part]
+                        else:
+                            current = None
+                            break
+                    if current is not None:
+                        logger.info(f"🔧 DEBUG: Nested field '{field_name}' = '{current}'")
+                        return str(current)
+                
+                # Field not found, return original
+                logger.warning(f"🔧 DEBUG: Field '{field_name}' not found in context")
+                return match.group(0)  # Return original {{field_name}}
+            
+            result = re.sub(pattern, replace_field, text)
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error replacing merge fields with context: {e}")
+            return text
+
+    def _normalize_field_name(self, field_name: str) -> str:
+        """Normalize field name to match Excel extraction normalization.
+
+        This handles cases where template uses {{gs_classes}} but data has g_s_classes
+        due to normalize_column_name() processing.
+        """
+        try:
+            from .utils.validation import normalize_column_name
+
+            return normalize_column_name(field_name)
+        except Exception as e:
+            logger.debug(f"Could not normalize field name '{field_name}': {e}")
+            return field_name
+
+    def _get_field_name_variations(self, field_name: str) -> List[str]:
+        """Get common variations of a field name for normalization mismatches.
+
+        Returns a list of field name variations to try when the original field is not found.
+        """
+        variations = [field_name]  # Start with original
+
+        try:
+            # Common patterns for field name normalization mismatches
+            # gs_classes <-> g_s_classes (ampersand becomes underscore)
+            if "_" in field_name:
+                # Try adding underscores around single letters
+                parts = field_name.split("_")
+                if len(parts) >= 2:
+                    # gs_classes -> g_s_classes (split first part)
+                    if len(parts[0]) > 1:
+                        first_part = parts[0]
+                        # Split camelCase or common patterns
+                        if "gs" in first_part.lower():
+                            new_first = "g_s"
+                            variations.append(new_first + "_" + "_".join(parts[1:]))
+
+                    # g_s_classes -> gs_classes (join first parts)
+                    if len(parts) >= 3 and len(parts[0]) == 1 and len(parts[1]) == 1:
+                        new_first = parts[0] + parts[1]  # g + s = gs
+                        variations.append(new_first + "_" + "_".join(parts[2:]))
+
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_variations = []
+            for var in variations:
+                if var not in seen:
+                    seen.add(var)
+                    unique_variations.append(var)
+
+            return unique_variations
+
+        except Exception as e:
+            logger.debug(f"Error generating field variations for '{field_name}': {e}")
+            return [field_name]
+
+    def _get_field_value_direct(self, field_name: str, data: Dict[str, Any]) -> Any:
+        """Get field value using direct lookup only (no variations/recursion).
+
+        This is used by the variation logic to avoid infinite recursion.
+        """
+        try:
+            field_parts = field_name.split(".")
+            current_value = data
+
+            # Direct path resolution only
+            for part in field_parts:
+                if isinstance(current_value, dict):
+                    current_value = current_value.get(part)
+                elif isinstance(current_value, list):
+                    try:
+                        index = int(part)
+                        current_value = (
+                            current_value[index]
+                            if 0 <= index < len(current_value)
+                            else None
+                        )
+                    except (ValueError, IndexError):
+                        current_value = None
+                else:
+                    current_value = None
+
+                if current_value is None:
+                    break
+
+            return current_value
+
+        except Exception as e:
+            logger.debug(f"Error in direct field lookup for '{field_name}': {e}")
+            return None
+
+    def _duplicate_slide_simple(self, source_slide, target_index: int):
+        """Create a simple duplicate of a slide.
+
+        This is a simplified version that creates a new slide with the same layout.
+        The actual content copying happens during merge field processing.
+        """
+        try:
+            slide_layout = source_slide.slide_layout
+            new_slide = self.presentation.slides.add_slide(slide_layout)
+
+            # Copy slide properties and content
+            # This is a basic implementation - a full version would copy all shapes
+            for shape in source_slide.shapes:
+                if hasattr(shape, "text_frame") and shape.text_frame:
+                    # Find corresponding shape in new slide and copy text
+                    for new_shape in new_slide.shapes:
+                        if (
+                            hasattr(new_shape, "text_frame")
+                            and new_shape.text_frame
+                            and new_shape.shape_type == shape.shape_type
+                        ):
+                            # Copy text content
+                            new_shape.text_frame.clear()
+                            for paragraph in shape.text_frame.paragraphs:
+                                p = new_shape.text_frame.add_paragraph()
+                                p.text = paragraph.text
+                                p.level = paragraph.level
+                            break
+
+            return new_slide
+
+        except Exception as e:
+            logger.error(f"Failed to duplicate slide: {e}")
+            # Return a basic slide if duplication fails
+            return self.presentation.slides.add_slide(source_slide.slide_layout)
+
+    def _duplicate_slide_enhanced(self, source_slide, target_index: int):
+        """Create an enhanced duplicate of a slide at the specified position.
+
+        This version properly copies all content and inserts at the right position.
+        """
+        try:
+            # Get the slide layout
+            slide_layout = source_slide.slide_layout
+
+            # Create exact copy using complete XML duplication
+            new_slide = self._copy_slide_xml(source_slide)
+
+            # Move slide to correct position using XML manipulation
+            # Note: Template markers will be removed during context processing
+            self._move_slide_to_position(new_slide, target_index)
+
+            logger.debug(f"Created enhanced duplicate slide at position {target_index}")
+            return new_slide
+
+        except Exception as e:
+            logger.error(f"Failed to duplicate slide (enhanced): {e}")
+            # Fall back to simple duplication
+            return self.presentation.slides.add_slide(source_slide.slide_layout)
+
+    def _copy_slide_xml(self, source_slide):
+        """Create an exact duplicate slide by copying complete XML structure.
+        
+        Uses python-pptx built-in slide creation then replaces XML content.
+        This is simpler and avoids relationship management issues.
+        """
+        try:
+            import copy
+            
+            # Get the source slide's complete XML element
+            source_xml = source_slide._element
+            
+            # Make a deep copy of the entire XML structure
+            target_xml = copy.deepcopy(source_xml)
+            
+            # Create new slide using python-pptx (handles relationships automatically)
+            new_slide = self.presentation.slides.add_slide(source_slide.slide_layout)
+            
+            # Replace the slide's inner content while preserving the element wrapper
+            # This maintains python-pptx object consistency while getting exact template content
+            new_slide._element.clear()
+            
+            # Copy all children from source XML into the new slide element  
+            for child in target_xml:
+                new_slide._element.append(copy.deepcopy(child))
+            
+            logger.debug("Complete XML slide copy completed successfully")
+            
+            # Add debugging to check if text is accessible after XML copy
+            logger.info(f"🔧 DEBUG: After XML copy, new slide has {len(new_slide.shapes)} shapes")
+            for i, shape in enumerate(new_slide.shapes):
+                if hasattr(shape, "text_frame") and shape.text_frame:
+                    shape_text = shape.text if hasattr(shape, 'text') else 'No text attr'
+                    logger.info(f"🔧 DEBUG: Post-copy shape {i+1} text: '{shape_text[:50]}'")
+                    logger.info(f"🔧 DEBUG: Post-copy shape {i+1} has {len(shape.text_frame.paragraphs)} paragraphs")
+                    for j, para in enumerate(shape.text_frame.paragraphs):
+                        logger.info(f"🔧 DEBUG: Post-copy paragraph {j+1} has {len(para.runs)} runs")
+                        for k, run in enumerate(para.runs):
+                            logger.info(f"🔧 DEBUG: Post-copy run {k+1} text: '{run.text}'")
+            
+            return new_slide
+            
+        except Exception as e:
+            logger.error(f"XML slide copy failed: {e}")
+            # Fallback to basic slide creation
+            return self.presentation.slides.add_slide(source_slide.slide_layout)
+
+
+    def _copy_slide_content_fallback(self, source_slide, target_slide):
+        """Fallback method for slide content copying."""
+        try:
+            # Basic text copying as fallback
+            for i, source_shape in enumerate(source_slide.shapes):
+                if i < len(target_slide.shapes):
+                    target_shape = target_slide.shapes[i]
+                    if hasattr(source_shape, 'text_frame') and hasattr(target_shape, 'text_frame'):
+                        if source_shape.text_frame and target_shape.text_frame:
+                            target_shape.text_frame.clear()
+                            for paragraph in source_shape.text_frame.paragraphs:
+                                p = target_shape.text_frame.add_paragraph()
+                                p.text = paragraph.text
+        except Exception as e:
+            logger.warning(f"Fallback slide copying also failed: {e}")
+
+    def _remove_template_markers(self, slide):
+        """Remove template markers ({{#list:table_name}}) from slide.
+        
+        This removes only the template markers while preserving all other content.
+        """
+        try:
+            template_marker_pattern = r'\{\{#list:[^}]+\}\}'
+            
+            for shape in slide.shapes:
+                if hasattr(shape, 'text_frame') and shape.text_frame:
+                    for paragraph in shape.text_frame.paragraphs:
+                        for run in paragraph.runs:
+                            if run.text:
+                                # Remove template markers from text
+                                import re
+                                cleaned_text = re.sub(template_marker_pattern, '', run.text)
+                                run.text = cleaned_text
+            
+            logger.debug("Template markers removed from slide")
+            
+        except Exception as e:
+            logger.warning(f"Failed to remove template markers: {e}")
+
+    def _move_slide_to_position(self, slide, target_index):
+        """Move a slide to the specified position in the presentation.
+        
+        Uses XML list manipulation to reorder slides properly.
+        """
+        try:
+            # Get the slide ID for the slide we want to move
+            slide_id = slide.slide_id
+            
+            # Get the presentation's slide ID list (XML)
+            slide_id_list = self.presentation.slides._sldIdLst
+            
+            # Find the slide element in the XML
+            slide_element = None
+            for sld_id in slide_id_list:
+                if int(sld_id.get('id', '0')) == slide_id:
+                    slide_element = sld_id
+                    break
+            
+            if slide_element is not None:
+                # Remove from current position
+                slide_id_list.remove(slide_element)
+                
+                # Insert at target position (clamp to valid range)
+                target_index = max(0, min(target_index, len(slide_id_list)))
+                slide_id_list.insert(target_index, slide_element)
+                
+                logger.debug(f"Moved slide to position {target_index}")
+            else:
+                logger.warning(f"Could not find slide element for ID {slide_id}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to move slide to position {target_index}: {e}")
+
+    def _copy_slide_content(self, source_slide, target_slide):
+        """Copy all content from source slide to target slide."""
+        try:
+            # Map source shapes to target shapes by position
+            source_shapes = list(source_slide.shapes)
+            target_shapes = list(target_slide.shapes)
+
+            # Copy text content from matching shapes
+            for i, source_shape in enumerate(source_shapes):
+                if i < len(target_shapes):
+                    target_shape = target_shapes[i]
+
+                    # Copy text frames
+                    if (
+                        hasattr(source_shape, "text_frame")
+                        and source_shape.text_frame
+                        and hasattr(target_shape, "text_frame")
+                        and target_shape.text_frame
+                    ):
+                        self._copy_text_frame(
+                            source_shape.text_frame, target_shape.text_frame
+                        )
+
+                    # Tables will be handled during merge processing
+                    elif source_shape.shape_type == MSO_SHAPE_TYPE.TABLE:
+                        pass
+
+        except Exception as e:
+            logger.error(f"Error copying slide content: {e}")
+
+    def _copy_text_frame(self, source_frame, target_frame):
+        """Copy text frame content from source to target."""
+        try:
+            # Clear target frame
+            target_frame.clear()
+
+            # Copy paragraphs
+            first_para = True
+            for para in source_frame.paragraphs:
+                if first_para and target_frame.paragraphs:
+                    # Use existing first paragraph
+                    p = target_frame.paragraphs[0]
+                    first_para = False
+                else:
+                    p = target_frame.add_paragraph()
+
+                p.text = para.text
+                p.level = para.level
+
+                # Copy basic formatting
+                if hasattr(para, "alignment") and para.alignment:
+                    p.alignment = para.alignment
+
+        except Exception as e:
+            logger.debug(f"Error copying text frame: {e}")
+
+    def _create_list_item_context(
+        self,
+        item: Dict[str, Any],
+        index: int,
+        total: int,
+        parent_data: Dict[str, Any],
+        dynamic_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Create context for a list item with special variables."""
+        try:
+            logger.info(f"🔧 DEBUG: Creating context for item {index+1}/{total}")
+            logger.info(f"🔧 DEBUG: Item data: {item}")
+            logger.info(f"🔧 DEBUG: Parent data keys: {list(parent_data.keys()) if parent_data else 'None'}")
+            
+            # Use utility function to create context
+            from .utils.slide_utils import create_list_context
+
+            special_variables = dynamic_config.get(
+                "special_variables",
+                {
+                    "index": "$index",
+                    "position": "$position",
+                    "first": "$first",
+                    "last": "$last",
+                    "odd": "$odd",
+                    "even": "$even",
+                },
+            )
+
+            context = create_list_context(
+                item, index, total, parent_data, special_variables
+            )
+            
+            logger.info(f"🔧 DEBUG: Created context with keys: {list(context.keys())}")
+            return context
+
+        except Exception as e:
+            logger.error(f"🔧 DEBUG: Error creating list context: {e}")
+            import traceback
+            logger.error(f"🔧 DEBUG: Traceback: {traceback.format_exc()}")
+            return item if isinstance(item, dict) else {}
+
+    def _process_slide_with_context(self, slide, context: Dict[str, Any]) -> None:
+        """Process a slide with a specific context (for dynamic slides)."""
+        logger.info(f"🔧 DEBUG: _process_slide_with_context called with context keys: {list(context.keys()) if context else 'None'}")
+        logger.info(f"🔧 DEBUG: Context data sample: {dict(list(context.items())[:5]) if context else 'None'}")
+        try:
+            # Process text shapes with context
+            shape_count = 0
+            processed_shapes = 0
+            for shape in slide.shapes:
+                shape_count += 1
+                if hasattr(shape, "text_frame") and shape.text_frame:
+                    logger.info(f"🔧 DEBUG: Processing text shape {shape_count} with text: {shape.text[:50] if hasattr(shape, 'text') else 'No text'}...")
+                    self._process_text_shape_with_context(shape, context)
+                    processed_shapes += 1
+                elif shape.shape_type == MSO_SHAPE_TYPE.TABLE:
+                    logger.info(f"🔧 DEBUG: Processing table shape {shape_count}")
+                    self._process_table_shape_with_context(shape, context)
+                    processed_shapes += 1
+            logger.info(f"🔧 DEBUG: Processed {processed_shapes}/{shape_count} shapes in slide")
+
+        except Exception as e:
+            logger.error(f"🔧 DEBUG: Error processing slide with context: {e}")
+            import traceback
+            logger.error(f"🔧 DEBUG: Traceback: {traceback.format_exc()}")
+
+    def _process_text_shape_with_context(self, shape, context: Dict[str, Any]) -> None:
+        """Process text shape with specific context using paragraph-level processing."""
+        try:
+            shape_text = shape.text if hasattr(shape, 'text') else 'No text attribute'
+            logger.info(f"🔧 DEBUG: Processing shape with text: {shape_text[:100]}")
+            
+            for paragraph in shape.text_frame.paragraphs:
+                self._process_paragraph_with_context(paragraph, context)
+                
+        except Exception as e:
+            logger.error(f"🔧 DEBUG: Error processing text shape with context: {e}")
+            import traceback
+            logger.error(f"🔧 DEBUG: Traceback: {traceback.format_exc()}")
+
+    def _process_paragraph_with_context(self, paragraph, context: Dict[str, Any]) -> None:
+        """Process a paragraph by concatenating all runs, applying patterns, then redistributing text."""
+        try:
+            # Step 1: Collect run information and build complete paragraph text
+            run_info = []
+            paragraph_text = ""
+            
+            logger.info(f"🔧 DEBUG: Paragraph has {len(paragraph.runs)} runs")
+            
+            for i, run in enumerate(paragraph.runs):
+                run_start = len(paragraph_text)
+                run_text = run.text
+                run_end = run_start + len(run_text)
+                
+                logger.info(f"🔧 DEBUG: Run {i+1}/{len(paragraph.runs)} - text: '{run_text}' (length: {len(run_text)})")
+                logger.info(f"🔧 DEBUG: Run {i+1} - hasattr text: {hasattr(run, 'text')}")
+                
+                # Try alternative ways to get text if run.text is empty
+                if not run_text and hasattr(run, '_element'):
+                    try:
+                        # Try to get text from XML element directly
+                        t_elements = run._element.findall('.//{*}t')
+                        xml_texts = [elem.text for elem in t_elements if elem.text]
+                        if xml_texts:
+                            run_text = ''.join(xml_texts)
+                            logger.info(f"🔧 DEBUG: Run {i+1} - extracted from XML: '{run_text}'")
+                    except Exception as e:
+                        logger.warning(f"🔧 DEBUG: Failed to extract XML text from run {i+1}: {e}")
+                
+                # Store run metadata for reconstruction
+                run_info.append({
+                    'start': run_start,
+                    'end': run_end,
+                    'text': run_text,
+                    'run_obj': run,
+                    'properties': self._extract_run_properties(run)
+                })
+                
+                paragraph_text += run_text
+                logger.info(f"🔧 DEBUG: Run [{run_start}:{run_end}]: '{run_text}'")
+            
+            original_paragraph_text = paragraph_text
+            logger.info(f"🔧 DEBUG: Complete paragraph text: '{paragraph_text}'")
+            
+            # Step 2: Check for patterns that span multiple runs
+            self._detect_multi_run_patterns(paragraph_text, run_info)
+            
+            # Step 3: Apply template marker removal on complete text
+            template_pattern = r"\{\{#list:[^}]+\}\}"
+            template_matches = re.findall(template_pattern, paragraph_text)
+            if template_matches:
+                logger.info(f"🔧 DEBUG: Found paragraph-level template markers: {template_matches}")
+                paragraph_text = re.sub(template_pattern, "", paragraph_text)
+                logger.info(f"🔧 DEBUG: After template removal: '{paragraph_text}'")
+            
+            # Step 4: Apply merge field replacement on complete text
+            merge_fields = re.findall(r"\{\{([^}]+)\}\}", paragraph_text)
+            logger.info(f"🔧 DEBUG: Found paragraph-level merge fields: {merge_fields}")
+            
+            for field in merge_fields:
+                field = field.strip()
+                logger.info(f"🔧 DEBUG: Resolving paragraph-level field: '{field}'")
+                field_value = self._get_field_value(field, context)
+                logger.info(f"🔧 DEBUG: Field '{field}' resolved to: '{field_value}' (type: {type(field_value)})")
+                
+                if field_value is not None:
+                    paragraph_text = paragraph_text.replace(f"{{{{{field}}}}}", str(field_value))
+                    logger.info(f"🔧 DEBUG: Replaced field '{field}' in paragraph text")
+                else:
+                    logger.warning(f"🔧 DEBUG: Could not resolve field '{field}' in context. Available keys: {list(context.keys()) if context else 'None'}")
+            
+            # Step 5: Redistribute modified text back to runs
+            if paragraph_text != original_paragraph_text:
+                logger.info(f"🔧 DEBUG: Paragraph text changed, redistributing to runs")
+                self._redistribute_text_to_runs(paragraph, paragraph_text, run_info)
+            else:
+                logger.info(f"🔧 DEBUG: Paragraph text unchanged, keeping original runs")
+                
+        except Exception as e:
+            logger.error(f"🔧 DEBUG: Error processing paragraph with context: {e}")
+            import traceback
+            logger.error(f"🔧 DEBUG: Traceback: {traceback.format_exc()}")
+
+    def _extract_run_properties(self, run) -> Dict[str, Any]:
+        """Extract run properties for later reconstruction."""
+        try:
+            properties = {}
+            if hasattr(run, '_element') and run._element is not None:
+                # Extract basic properties that can be easily restored
+                rPr = run._element.get_or_add_rPr()
+                properties['lang'] = rPr.get('lang', 'en-GB')
+                properties['dirty'] = rPr.get('dirty', '0')
+                properties['err'] = rPr.get('err', None)  # Preserve spell check errors
+            return properties
+        except Exception as e:
+            logger.warning(f"Failed to extract run properties: {e}")
+            return {}
+
+    def _detect_multi_run_patterns(self, paragraph_text: str, run_info: list) -> None:
+        """Detect and log patterns that span multiple runs for debugging."""
+        try:
+            # Check for template markers spanning runs
+            template_matches = re.finditer(r"\{\{#list:[^}]+\}\}", paragraph_text)
+            for match in template_matches:
+                start, end = match.span()
+                spanning_runs = [info for info in run_info if info['start'] < end and info['end'] > start]
+                if len(spanning_runs) > 1:
+                    run_texts = [info['text'] for info in spanning_runs]
+                    logger.info(f"🔧 DEBUG: Template marker '{match.group()}' spans {len(spanning_runs)} runs: {run_texts}")
+            
+            # Check for merge fields spanning runs
+            field_matches = re.finditer(r"\{\{([^}]+)\}\}", paragraph_text)
+            for match in field_matches:
+                start, end = match.span()
+                spanning_runs = [info for info in run_info if info['start'] < end and info['end'] > start]
+                if len(spanning_runs) > 1:
+                    run_texts = [info['text'] for info in spanning_runs]
+                    logger.info(f"🔧 DEBUG: Merge field '{match.group()}' spans {len(spanning_runs)} runs: {run_texts}")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to detect multi-run patterns: {e}")
+
+    def _redistribute_text_to_runs(self, paragraph, new_text: str, run_info: list) -> None:
+        """Redistribute modified text back to runs while preserving formatting."""
+        try:
+            # Clear existing runs
+            paragraph._element.clear()
+            
+            if not new_text:
+                # If text is empty, create one empty run
+                paragraph.add_run()
+                return
+            
+            # Simple redistribution: put all text in first run, preserve its formatting
+            if run_info:
+                first_run = paragraph.add_run()
+                first_run.text = new_text
+                
+                # Try to restore basic properties from the first original run
+                try:
+                    original_props = run_info[0]['properties']
+                    if original_props and hasattr(first_run, '_element'):
+                        rPr = first_run._element.get_or_add_rPr()
+                        if 'lang' in original_props:
+                            rPr.set('lang', original_props['lang'])
+                        if 'dirty' in original_props:
+                            rPr.set('dirty', original_props['dirty'])
+                        # Don't restore 'err' attribute - we don't want spell check errors on replaced text
+                except Exception as e:
+                    logger.warning(f"Failed to restore run properties: {e}")
+            else:
+                # Fallback: create basic run
+                run = paragraph.add_run()
+                run.text = new_text
+                
+            logger.info(f"🔧 DEBUG: Redistributed text to runs: '{new_text[:100]}{'...' if len(new_text) > 100 else ''}'")
+            
+        except Exception as e:
+            logger.error(f"Failed to redistribute text to runs: {e}")
+            # Fallback: try to create a basic run
+            try:
+                paragraph.add_run().text = new_text
+            except Exception as e2:
+                logger.error(f"Even fallback redistribution failed: {e2}")
+
+    def _process_table_shape_with_context(self, shape, context: Dict[str, Any]) -> None:
+        """Process table shape with specific context."""
+        try:
+            table = shape.table
+            for row in table.rows:
+                for cell in row.cells:
+                    if cell.text_frame:
+                        for paragraph in cell.text_frame.paragraphs:
+                            for run in paragraph.runs:
+                                original_text = run.text
+
+                                # First, remove any template list markers
+                                template_pattern = r"\{\{#list:[^}]+\}\}"
+                                run.text = re.sub(template_pattern, "", run.text)
+
+                                # Find remaining merge fields in the text
+                                merge_fields = re.findall(r"\{\{([^}]+)\}\}", run.text)
+
+                                for field in merge_fields:
+                                    field = field.strip()
+
+                                    # Use the enhanced _get_field_value method
+                                    field_value = self._get_field_value(field, context)
+
+                                    if field_value is not None and field_value != "":
+                                        # Replace the merge field with the value
+                                        run.text = run.text.replace(
+                                            f"{{{{{field}}}}}", str(field_value)
+                                        )
+
+        except Exception as e:
+            logger.error(f"Error processing table shape with context: {e}")
+
+    def test_slide_id_tracking(self) -> bool:
+        """Test function to verify slide ID tracking works correctly.
+        
+        Returns:
+            True if slide ID tracking is working, False otherwise
+        """
+        try:
+            if not self.presentation:
+                logger.error("No presentation loaded for slide ID tracking test")
+                return False
+                
+            # Test: Create a set to track processed slide IDs (simulating the fix)
+            test_processed_ids = set()
+            
+            # Get existing slide IDs
+            existing_slide_ids = [slide.slide_id for slide in self.presentation.slides]
+            logger.info(f"🔧 TEST: Found {len(existing_slide_ids)} existing slides with IDs: {existing_slide_ids}")
+            
+            # Simulate adding new slide IDs to the set (this is what our fix does)
+            for slide_id in existing_slide_ids:
+                test_processed_ids.add(slide_id)
+                logger.info(f"🔧 TEST: Added slide ID {slide_id} to processed set")
+            
+            # Verify tracking works - check that slide IDs are in the set
+            tracking_works = True
+            for slide in self.presentation.slides:
+                if slide.slide_id not in test_processed_ids:
+                    logger.error(f"🔧 TEST: FAIL - Slide ID {slide.slide_id} not found in processed set")
+                    tracking_works = False
+                else:
+                    logger.info(f"🔧 TEST: PASS - Slide ID {slide.slide_id} correctly tracked")
+            
+            if tracking_works:
+                logger.info("🔧 TEST: Slide ID tracking test PASSED - all slide IDs correctly tracked")
+            else:
+                logger.error("🔧 TEST: Slide ID tracking test FAILED - some IDs missing")
+                
+            return tracking_works
+            
+        except Exception as e:
+            logger.error(f"🔧 TEST: Slide ID tracking test error: {e}")
+            return False
+
+    def test_paragraph_level_processing(self) -> bool:
+        """Test function to verify paragraph-level processing works correctly.
+        
+        Returns:
+            True if paragraph-level processing works, False otherwise
+        """
+        try:
+            if not self.presentation:
+                logger.error("No presentation loaded for paragraph processing test")
+                return False
+            
+            # Test context data
+            test_context = {
+                'gs_classes': '35 - Business Services',
+                'gs_terms': 'Business management and administration services'
+            }
+            
+            # Find a slide with text shapes to test
+            for slide_idx, slide in enumerate(self.presentation.slides):
+                if len(slide.shapes) > 0:
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text_frame") and shape.text_frame:
+                            # Test the paragraph processing on this shape
+                            logger.info(f"🔧 TEST: Testing paragraph processing on slide {slide_idx + 1}")
+                            logger.info(f"🔧 TEST: Original shape text: '{shape.text[:100] if hasattr(shape, 'text') else 'No text'}'")
+                            
+                            # Process the shape with our new method
+                            self._process_text_shape_with_context(shape, test_context)
+                            
+                            # Check results
+                            new_text = shape.text if hasattr(shape, 'text') else ''
+                            logger.info(f"🔧 TEST: Processed shape text: '{new_text[:100]}'")
+                            
+                            logger.info("🔧 TEST: Paragraph-level processing test completed")
+                            return True
+            
+            logger.warning("🔧 TEST: No suitable text shapes found for testing")
+            return False
+            
+        except Exception as e:
+            logger.error(f"🔧 TEST: Paragraph processing test error: {e}")
+            import traceback
+            logger.error(f"🔧 TEST: Traceback: {traceback.format_exc()}")
+            return False
+
+    def test_two_pass_processing(self) -> bool:
+        """Test function to verify two-pass processing works correctly.
+        
+        Returns:
+            True if two-pass processing works, False otherwise
+        """
+        try:
+            if not self.presentation:
+                logger.error("No presentation loaded for two-pass processing test")
+                return False
+                
+            # Test data simulating the real dynamic slide scenario
+            test_data = {
+                'gs_classes_terms': [
+                    {'gs_classes': '35 - Business Services', 'gs_terms': 'Business management services'},
+                    {'gs_classes': '37 - Education', 'gs_terms': 'Training and education services'}
+                ]
+            }
+            
+            # Test config
+            test_config = {
+                'global_settings': {
+                    'powerpoint': {
+                        'dynamic_slides': {
+                            'enabled': True,
+                            'template_marker': '{{#list:',
+                            'remove_template_slides': True
+                        }
+                    }
+                }
+            }
+            
+            logger.info("🔧 TEST: Starting two-pass processing test")
+            
+            # Test Pass 1: Dynamic slide creation
+            powerpoint_config = test_config['global_settings']['powerpoint']
+            dynamic_slide_mapping = self._create_dynamic_slides_pass(test_data, powerpoint_config)
+            
+            logger.info(f"🔧 TEST: Pass 1 created {len(dynamic_slide_mapping)} dynamic slide mappings")
+            
+            # Test Pass 2: Content processing
+            self._process_slides_pass(test_data, {}, powerpoint_config, dynamic_slide_mapping)
+            
+            logger.info("🔧 TEST: Two-pass processing test completed successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"🔧 TEST: Two-pass processing test error: {e}")
+            import traceback
+            logger.error(f"🔧 TEST: Traceback: {traceback.format_exc()}")
+            return False
 
     def _process_slide(
         self,
@@ -180,24 +1765,44 @@ class PowerPointProcessor:
         images: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     ) -> None:
         """Process a single slide for merge field replacement."""
+        slide_id = getattr(slide, 'slide_id', 'unknown')
+        logger.debug(f"Starting _process_slide for slide ID {slide_id}")
+        
         try:
             # Process text shapes
-            for shape in slide.shapes:
+            shapes_list = list(slide.shapes)
+            shape_count = len(shapes_list)
+            logger.debug(f"Found {shape_count} shapes to process in slide {slide_id}")
+            
+            processed_shapes = 0
+            for i, shape in enumerate(shapes_list):
+                logger.debug(f"Processing shape {i+1}/{shape_count}, type: {getattr(shape, 'shape_type', 'unknown')}")
+                
                 if hasattr(shape, "text_frame") and shape.text_frame:
+                    logger.debug(f"Processing text shape {i+1}")
                     self._process_text_shape(shape, data, images)
+                    processed_shapes += 1
 
                 # Process tables
                 elif shape.shape_type == MSO_SHAPE_TYPE.TABLE:
+                    logger.debug(f"Processing table shape {i+1}")
                     self._process_table_shape(shape, data)
+                    processed_shapes += 1
 
                 # Process placeholder images
                 elif hasattr(shape, "text") and shape.text:
                     # Check if this is an image placeholder
                     if self._is_image_placeholder(shape.text):
+                        logger.debug(f"Processing image placeholder shape {i+1}")
                         self._replace_image_placeholder(slide, shape, data, images)
+                        processed_shapes += 1
+                else:
+                    logger.debug(f"Skipping shape {i+1} - no processable content")
+            
+            logger.debug(f"Completed _process_slide for slide {slide_id}: processed {processed_shapes}/{shape_count} shapes")
 
         except Exception as e:
-            logger.error(f"Failed to process slide: {e}")
+            logger.error(f"Failed to process slide {slide_id}: {e}")
 
     def _process_text_shape(
         self,
@@ -518,62 +2123,76 @@ class PowerPointProcessor:
         field_lower = field_name.lower()
 
         # Strategy 1: Direct field name matching
-        for sheet_name, sheet_images in images.items():
-            for image_info in sheet_images:
-                # Check if field name contains position information
-                if "position" in image_info:
-                    position = image_info["position"]
-                    if position.get("estimated_cell"):
-                        cell_ref = position["estimated_cell"].lower()
-                        if cell_ref in field_lower or field_lower.endswith(cell_ref):
-                            logger.info(
-                                f"Found image by position match: {image_info['path']}"
-                            )
-                            return image_info["path"]
+        try:
+            for sheet_name, sheet_images in images.items():
+                for image_info in sheet_images:
+                    # Check if field name contains position information
+                    if "position" in image_info:
+                        position = image_info["position"]
+                        if position.get("estimated_cell"):
+                            cell_ref = position["estimated_cell"].lower()
+                            if cell_ref in field_lower or field_lower.endswith(
+                                cell_ref
+                            ):
+                                logger.info(
+                                    f"Found image by position match: {image_info['path']}"
+                                )
+                                return image_info["path"]
+        except Exception as e:
+            logger.debug(f"Error in position-based image matching: {e}")
 
         # Strategy 2: Pattern matching for common image field patterns
-        patterns = [
-            r"image_search\.(\d+)\.image",  # image_search.0.image
-            r"(\w+)_image_(\d+)",  # sheet_image_1
-            r"image(\d+)",  # image1
-            r"img(\d+)",  # img1
-        ]
+        try:
+            patterns = [
+                r"image_search\.(\d+)\.image",  # image_search.0.image
+                r"(\w+)_image_(\d+)",  # sheet_image_1
+                r"image(\d+)",  # image1
+                r"img(\d+)",  # img1
+            ]
 
-        for pattern in patterns:
-            match = re.search(pattern, field_lower)
-            if match:
-                index_str = match.group(1) if match.groups() else "0"
-                try:
-                    index = int(index_str)
-                    # Find image by index across all sheets
-                    for sheet_name, sheet_images in images.items():
-                        if 0 <= index < len(sheet_images):
-                            logger.info(
-                                f"Found image by pattern match: {sheet_images[index]['path']}"
-                            )
-                            return sheet_images[index]["path"]
-                except (ValueError, IndexError):
-                    continue
+            for pattern in patterns:
+                match = re.search(pattern, field_lower)
+                if match:
+                    index_str = match.group(1) if match.groups() else "0"
+                    try:
+                        index = int(index_str)
+                        # Find image by index across all sheets
+                        for sheet_name, sheet_images in images.items():
+                            if 0 <= index < len(sheet_images):
+                                logger.info(
+                                    f"Found image by pattern match: {sheet_images[index]['path']}"
+                                )
+                                return sheet_images[index]["path"]
+                    except (ValueError, IndexError):
+                        continue
+        except Exception as e:
+            logger.debug(f"Error in pattern-based image matching: {e}")
 
         # Strategy 3: Keyword matching
-        keywords = ["image", "img", "picture", "photo"]
-        for keyword in keywords:
-            if keyword in field_lower:
-                # Return first available image
-                for sheet_name, sheet_images in images.values():
-                    if sheet_images:
-                        logger.info(
-                            f"Found image by keyword match: {sheet_images[0]['path']}"
-                        )
-                        return sheet_images[0]["path"]
+        try:
+            keywords = ["image", "img", "picture", "photo"]
+            for keyword in keywords:
+                if keyword in field_lower:
+                    # Return first available image
+                    for sheet_name, sheet_images in images.items():
+                        if sheet_images:
+                            logger.info(
+                                f"Found image by keyword match: {sheet_images[0]['path']}"
+                            )
+                            return sheet_images[0]["path"]
+        except Exception as e:
+            logger.debug(f"Error in keyword-based image matching: {e}")
 
         # Strategy 4: Just use the first available image if all else fails
-        for sheet_name, sheet_images in images.items():
-            if sheet_images:
-                logger.info(
-                    f"No specific match found, using first available image: {sheet_images[0]['path']}"
-                )
-                return sheet_images[0]["path"]
+        try:
+            for sheet_name, sheet_images in images.items():
+                if sheet_images:
+                    logger.info(
+                        f"No specific match found, using first available image: {sheet_images[0]['path']}"
+                    )
+                    return sheet_images[0]["path"]
+        except Exception as e:
+            logger.debug(f"Error in fallback image matching: {e}")
 
         logger.warning(f"No image found for field: {field_name}")
         return None
@@ -746,6 +2365,18 @@ class PowerPointProcessor:
     ) -> bool:
         """Process paragraph while preserving run-level formatting - ITERATIVE VERSION."""
         try:
+            # First, remove any template list markers from all runs
+            template_pattern = r"\{\{#list:[^}]+\}\}"
+            for run in paragraph.runs:
+                if run.text:
+                    original_text = run.text
+                    cleaned_text = re.sub(template_pattern, "", run.text)
+                    if cleaned_text != original_text:
+                        run.text = cleaned_text
+                        logger.debug(
+                            f"Removed template markers from run: '{original_text}' -> '{cleaned_text}'"
+                        )
+
             # Use iterative approach to avoid position conflicts
             # When we replace one field, it changes text positions, so we need to
             # recalculate positions for remaining fields
@@ -830,6 +2461,19 @@ class PowerPointProcessor:
             paragraph_text = ""
             for run in paragraph.runs:
                 paragraph_text += run.text
+
+            # Remove template list markers before processing merge fields
+            template_pattern = r"\{\{#list:[^}]+\}\}"
+            paragraph_text = re.sub(template_pattern, "", paragraph_text)
+
+            # Update runs with cleaned text if template markers were removed
+            original_text = "".join(run.text for run in paragraph.runs)
+            if paragraph_text != original_text:
+                # Clear existing runs and set cleaned text
+                for run in paragraph.runs:
+                    run.text = ""
+                if paragraph.runs:
+                    paragraph.runs[0].text = paragraph_text
 
             # Find merge fields in paragraph
             merge_fields = validate_merge_fields(paragraph_text)
@@ -1120,9 +2764,15 @@ class PowerPointProcessor:
                 removed_count = 0
                 for run in runs_to_remove:
                     try:
-                        # Remove the run's XML element from the paragraph
-                        paragraph._element.remove(run._element)
-                        removed_count += 1
+                        # Check if run has _element attribute before accessing it
+                        if hasattr(run, "_element") and run._element is not None:
+                            # Remove the run's XML element from the paragraph
+                            paragraph._element.remove(run._element)
+                            removed_count += 1
+                        else:
+                            logger.debug(
+                                f"Run object doesn't have _element attribute, skipping removal"
+                            )
                     except Exception as remove_err:
                         logger.warning(
                             f"Could not remove problematic run: {remove_err}"
@@ -1642,15 +3292,16 @@ class PowerPointProcessor:
             current_value = data
 
             # Debug logging for field resolution
-            logger.debug(f"🔍 Getting field value for: {field_name}")
-            logger.debug(f"📊 Data keys at root level: {list(data.keys())}")
+            logger.info(f"🔧 DEBUG: Getting field value for: '{field_name}'")
+            logger.info(f"🔧 DEBUG: Data keys at root level: {list(data.keys())}")
+            logger.info(f"🔧 DEBUG: Data type: {type(data)}")
 
             # First try direct path resolution
             for part in field_parts:
                 if isinstance(current_value, dict):
                     current_value = current_value.get(part)
-                    logger.debug(
-                        f"🔸 After part '{part}': {type(current_value).__name__} = {current_value}"
+                    logger.info(
+                        f"🔧 DEBUG: After part '{part}': {type(current_value).__name__} = {current_value}"
                     )
                 elif isinstance(current_value, list):
                     try:
@@ -1660,16 +3311,16 @@ class PowerPointProcessor:
                             if 0 <= index < len(current_value)
                             else None
                         )
-                        logger.debug(
-                            f"🔹 After list index {index}: {type(current_value).__name__} = {current_value}"
+                        logger.info(
+                            f"🔧 DEBUG: After list index {index}: {type(current_value).__name__} = {current_value}"
                         )
                     except (ValueError, IndexError):
                         current_value = None
-                        logger.debug(f"❌ Invalid list index: {part}")
+                        logger.info(f"🔧 DEBUG: Invalid list index: {part}")
                 else:
                     current_value = None
-                    logger.debug(
-                        f"🚫 Cannot navigate further from {type(current_value).__name__}"
+                    logger.info(
+                        f"🔧 DEBUG: Cannot navigate further from {type(current_value).__name__}"
                     )
 
                 if current_value is None:
@@ -1677,8 +3328,8 @@ class PowerPointProcessor:
 
             # If direct path failed and we have sheet data, try looking in each sheet
             if current_value is None:
-                logger.debug(
-                    "🔄 Direct path resolution failed, trying sheet-nested lookup"
+                logger.info(
+                    "🔧 DEBUG: Direct path resolution failed, trying sheet-nested lookup"
                 )
                 # Try to find the field in sheet data (e.g., order_form.image_search.0.field)
                 for sheet_name, sheet_data in data.items():
@@ -1718,12 +3369,12 @@ class PowerPointProcessor:
                                 key in str(nested_value).lower()
                                 for key in ["base64", "data:image"]
                             ):
-                                logger.debug(
-                                    f"Found image data via sheet-nested lookup for field: {field_name}"
+                                logger.info(
+                                    f"🔧 DEBUG: Found image data via sheet-nested lookup for field: {field_name}"
                                 )
                             else:
-                                logger.debug(
-                                    f"Found value via sheet-nested lookup: {nested_value}"
+                                logger.info(
+                                    f"🔧 DEBUG: Found value via sheet-nested lookup: {nested_value}"
                                 )
                             return nested_value
 
@@ -1800,6 +3451,33 @@ class PowerPointProcessor:
                                                 f"Found value in first row of {table_name}[0].{field_key}: {value}"
                                             )
                                         return value
+
+            # If field not found, try common field name variations
+            if current_value is None and field_name:
+                logger.debug(f"Field '{field_name}' not found, trying variations")
+
+                # Try common field name variations for normalization mismatches
+                variations = self._get_field_name_variations(field_name)
+
+                for variation in variations:
+                    if variation != field_name:
+                        logger.debug(f"Trying field variation: '{variation}'")
+
+                        # Reconstruct path with variation
+                        if len(field_parts) > 1:
+                            variation_parts = field_parts[:-1] + [variation]
+                            variation_path = ".".join(variation_parts)
+                        else:
+                            variation_path = variation
+
+                        # Try the variation (non-recursive to avoid infinite loops)
+                        temp_value = self._get_field_value_direct(variation_path, data)
+                        if temp_value is not None:
+                            logger.debug(
+                                f"Found value using field variation: {variation}"
+                            )
+                            current_value = temp_value
+                            break
 
             # Ensure missing fields return empty string instead of None
             if current_value is None:
@@ -1979,10 +3657,19 @@ class PowerPointProcessor:
             # Extract the image format and data
             if base64_data.startswith("data:image/"):
                 # Format: data:image/png;base64,iVBORw0KGgo...
-                header, encoded_data = base64_data.split(",", 1)
-                image_format = header.split("/")[1].split(";")[
-                    0
-                ]  # Extract 'png' from 'data:image/png;base64'
+                split_result = base64_data.split(",", 1)
+                if len(split_result) == 2:
+                    header, encoded_data = split_result
+                    image_format = header.split("/")[1].split(";")[
+                        0
+                    ]  # Extract 'png' from 'data:image/png;base64'
+                else:
+                    # Malformed data URL, treat as raw base64
+                    logger.warning(
+                        f"Malformed data URL, treating as raw base64: {base64_data[:50]}..."
+                    )
+                    encoded_data = base64_data
+                    image_format = "png"
             else:
                 # Raw base64 data, assume PNG
                 encoded_data = base64_data

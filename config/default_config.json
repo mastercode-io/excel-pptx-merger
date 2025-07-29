@@ -167,6 +167,27 @@
       "currency_format": "$%.2f",
       "number_format": "%.2f",
       "text_encoding": "utf-8"
+    },
+    "powerpoint": {
+      "dynamic_slides": {
+        "enabled": true,
+        "template_marker": "{{#list:",
+        "remove_template_slides": true,
+        "special_variables": {
+          "index": "$index",
+          "position": "$position",
+          "first": "$first",
+          "last": "$last",
+          "odd": "$odd",
+          "even": "$even"
+        },
+        "parent_context_prefix": "../",
+        "root_context_prefix": "$root."
+      },
+      "slide_filter": {
+        "include_slides": [],
+        "exclude_slides": []
+      }
     }
   },
   "range_images": [

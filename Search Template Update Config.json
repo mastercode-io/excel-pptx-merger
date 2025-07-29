@@ -1,0 +1,221 @@
+{
+  "version": "1.0",
+  "sheet_configs": {
+    "Order Form": {
+      "subtables": [
+        {
+          "name": "report_info",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Search/Audit or Monitoring & Representation",
+            "column": "A",
+            "search_range": "A1:A5"
+          },
+          "data_update": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 1,
+            "column_mappings": {
+              "Search/Audit or Monitoring & Representation": {
+                "name": "report_title",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "client_info",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Client Info",
+            "column": "A",
+            "search_range": "A3:A10"
+          },
+          "data_update": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "data_row_offset": 1,
+            "max_columns": 1,
+            "max_rows": 8,
+            "column_mappings": {
+              "Client Name": {
+                "name": "client_name",
+                "type": "text"
+              },
+              "Deal ID": {
+                "name": "deal_id",
+                "type": "text"
+              },
+              "Word Or Image": {
+                "name": "search_type",
+                "type": "text"
+              },
+              "G&S Classes": {
+                "name": "gs_classes",
+                "type": "text"
+              },
+              "SIC": {
+                "name": "sic_code",
+                "type": "text"
+              },
+              "Nature of business": {
+                "name": "business_nature",
+                "type": "text"
+              },
+              "Designated Countries": {
+                "name": "countries",
+                "type": "text"
+              },
+              "Search Platforms": {
+                "name": "platforms",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "word_search_criteria",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Word Search Criteria",
+            "column": "A",
+            "search_range": "A10:A20"
+          },
+          "data_update": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "data_row_offset": 1,
+            "max_columns": 1,
+            "max_rows": 6,
+            "column_mappings": {
+              "Exact Match": {
+                "name": "exact_match",
+                "type": "text"
+              },
+              "Similar Match": {
+                "name": "similar_match",
+                "type": "text"
+              },
+              "Start With": {
+                "name": "start_with",
+                "type": "text"
+              },
+              "Contains": {
+                "name": "contains",
+                "type": "text"
+              },
+              "Domain Search1": {
+                "name": "domain_search1",
+                "type": "text"
+              },
+              "Domain Search2": {
+                "name": "domain_search2",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "image_search_criteria",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Image Search Criteria",
+            "column": "A",
+            "search_range": "A15:A25"
+          },
+          "data_update": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "data_row_offset": 1,
+            "max_columns": 1,
+            "max_rows": 2,
+            "column_mappings": {
+              "Image Mark 1": {
+                "name": "image_mark_1",
+                "type": "image"
+              },
+              "Image Mark 2": {
+                "name": "image_mark_2",
+                "type": "image"
+              }
+            }
+          }
+        },
+        {
+          "name": "gs_terms",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "G&S Terms",
+            "column": "A",
+            "search_range": "A20:A30"
+          },
+          "data_update": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 1,
+            "column_mappings": {
+              "G&S Terms": {
+                "name": "gs_terms",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "links",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Links",
+            "column": "A",
+            "search_range": "A30:A40"
+          },
+          "data_update": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "data_row_offset": 1,
+            "max_columns": 1,
+            "max_rows": 2,
+            "column_mappings": {
+              "Client Portal": {
+                "name": "client_portal",
+                "type": "image"
+              },
+              "Booking Link": {
+                "name": "booking_link",
+                "type": "image"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "global_settings": {
+    "normalize_keys": true,
+    "temp_file_cleanup": {
+      "enabled": true,
+      "delay_seconds": 300,
+      "keep_on_error": true,
+      "development_mode": false
+    },
+    "image_compression": {
+      "enabled": false,
+      "threshold_mb": 2,
+      "quality": 80
+    },
+    "powerpoint_processing": {
+      "default_image_size": {
+        "width_inches": 1.0,
+        "height_inches": 1.0
+      }
+    }
+  }
+}

@@ -307,6 +307,22 @@ class ExcelProcessor:
 
             for sheet_name, config in sheet_config.items():
                 logger.debug(f"Processing sheet: {sheet_name}")
+                
+                # DEBUG gs_classes_terms sheet processing
+                if sheet_name == "Order Form":
+                    logger.info("⚡" * 50)
+                    logger.info("⚡ ORDER FORM SHEET PROCESSING (contains gs_classes_terms)")
+                    logger.info(f"⚡ Sheet config: {config}")
+                    
+                    # Check if this config contains gs_classes_terms subtable
+                    subtables = config.get("subtables", [])
+                    for subtable in subtables:
+                        if subtable.get("name") == "gs_classes_terms":
+                            logger.info(f"⚡ Found gs_classes_terms subtable config: {subtable}")
+                            data_extraction = subtable.get("data_extraction", {})
+                            column_mappings = data_extraction.get("column_mappings", {})
+                            logger.info(f"⚡ gs_classes_terms column_mappings: {column_mappings}")
+                    logger.info("⚡" * 50)
 
                 if sheet_name not in self.workbook.sheetnames:
                     logger.warning(f"Sheet '{sheet_name}' not found in workbook")
@@ -371,14 +387,38 @@ class ExcelProcessor:
     ) -> Dict[str, Any]:
         """Extract data for a specific subtable configuration."""
         subtable_type = config.get("type", "table")
+        subtable_name = config.get("name", "unnamed")
         header_search = config.get("header_search", {})
         data_extraction = config.get("data_extraction", {})
+        
+        # DEBUG ALL SUBTABLES
+        logger.info(f"🔍 SUBTABLE: {subtable_name} (type: {subtable_type})")
+        if subtable_name == "gs_classes_terms":
+            logger.info("🔥" * 50)
+            logger.info("🔥 GS_CLASSES_TERMS SUBTABLE PROCESSING")
+            logger.info(f"🔥 Full subtable config: {config}")
+            logger.info(f"🔥 data_extraction: {data_extraction}")
+            logger.info(f"🔥 header_search: {header_search}")
+            logger.info(f"🔥 subtable_type: {subtable_type}")
+            
+            # Check if data_extraction has column_mappings
+            column_mappings_in_config = data_extraction.get("column_mappings", {})
+            logger.info(f"🔥 column_mappings in data_extraction: {column_mappings_in_config}")
+            
+            # Log the exact keys and values in column_mappings
+            for key, value in column_mappings_in_config.items():
+                logger.info(f"🔥 Column mapping: '{key}' -> {value}")
+            
+            logger.info("🔥" * 50)
 
         # Find the header location
         header_location = self._find_header_location(worksheet, header_search)
         if not header_location:
-            logger.warning("Header location not found")
+            logger.warning(f"Header location not found for {subtable_name}")
             return {}
+        else:
+            if subtable_name == "gs_classes_terms":
+                logger.info(f"🔍 GS_CLASSES_TERMS - header found at: {header_location}")
 
         # Extract data based on type
         if subtable_type == "key_value_pairs":
@@ -629,6 +669,25 @@ class ExcelProcessor:
         max_columns = config.get("max_columns", 20)
         max_rows = config.get("max_rows", 1000)
         column_mappings = config.get("column_mappings", {})
+        # DEBUG ALL TABLES - Log every table extraction
+        logger.info(f"🔍 TABLE EXTRACTION - column_mappings: {column_mappings}")
+        logger.info(f"🔍 TABLE EXTRACTION - config keys: {list(config.keys())}")
+        
+        # SPECIAL DEBUG FOR gs_classes_terms TABLE
+        is_gs_classes_terms = any("gs" in str(k).lower() and "class" in str(k).lower() for k in column_mappings.keys())
+        if is_gs_classes_terms:
+            logger.info("🎯" * 50)
+            logger.info("🎯 GS_CLASSES_TERMS TABLE EXTRACTION DEBUG")
+            logger.info(f"🎯 Full config passed to _extract_table_data: {config}")
+            logger.info(f"🎯 Column mappings: {column_mappings}")
+            logger.info(f"🎯 Column mapping keys: {list(column_mappings.keys())}")
+            logger.info(f"🎯 Column mapping values: {list(column_mappings.values())}")
+            for key, mapping in column_mappings.items():
+                if isinstance(mapping, dict):
+                    logger.info(f"🎯 Mapping '{key}' -> name: '{mapping.get('name')}', type: '{mapping.get('type')}'")
+                else:
+                    logger.info(f"🎯 Mapping '{key}' -> '{mapping}'")
+            logger.info("🎯" * 50)
 
         try:
             # Extract headers
@@ -657,9 +716,21 @@ class ExcelProcessor:
                                 "name", normalize_column_name(header)
                             )
                             field_type = mapping.get("type", "text")
+                        
+                        # DEBUG gs_classes_terms header mapping
+                        if is_gs_classes_terms:
+                            logger.info(f"🎯 HEADER MAPPING: '{header}' found in column_mappings")
+                            logger.info(f"🎯 HEADER MAPPING: mapping = {mapping}")
+                            logger.info(f"🎯 HEADER MAPPING: mapped_header = '{mapped_header}'")
+                            logger.info(f"🎯 HEADER MAPPING: field_type = '{field_type}'")
                     else:
                         mapped_header = normalize_column_name(header)
                         field_type = "text"  # Default type
+                        
+                        # DEBUG gs_classes_terms header mapping
+                        if is_gs_classes_terms:
+                            logger.info(f"🎯 HEADER NORMALIZATION: '{header}' NOT found in column_mappings")
+                            logger.info(f"🎯 HEADER NORMALIZATION: normalized to '{mapped_header}'")
 
                     headers.append(mapped_header)
                     field_types[mapped_header] = field_type
@@ -792,6 +863,8 @@ class ExcelProcessor:
                 if header_cell.value and not is_empty_cell_value(header_cell.value):
                     header = str(header_cell.value).strip()
                     original_headers.append(header)
+                    # DEBUG ALL TABLES - Log every header found
+                    logger.info(f"🔍 HEADER FOUND: '{header}'")
 
                     # Apply column mapping if available
                     if header in column_mappings:
@@ -804,9 +877,13 @@ class ExcelProcessor:
                                 "name", normalize_column_name(header)
                             )
                             field_type = mapping.get("type", "text")
+                        # DEBUG ALL TABLES - Log every mapping applied
+                        logger.info(f"🔍 MAPPING APPLIED: '{header}' -> '{mapped_header}'")
                     else:
                         mapped_header = normalize_column_name(header)
                         field_type = "text"
+                        # DEBUG ALL TABLES - Log every normalization fallback
+                        logger.info(f"🔍 NO MAPPING: '{header}' -> normalized: '{mapped_header}'")
 
                     headers.append(mapped_header)
                     field_types[mapped_header] = field_type

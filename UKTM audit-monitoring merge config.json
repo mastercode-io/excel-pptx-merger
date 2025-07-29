@@ -1,0 +1,736 @@
+{
+  "version": "1.0",
+  "sheet_configs": {
+    "Order Form": {
+      "subtables": [
+        {
+          "name": "report_info",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Search/Audit or Monitoring & Representation",
+            "column": "A",
+            "search_range": "A1:A5"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 1,
+            "column_mappings": {
+              "Search/Audit or Monitoring & Representation": {
+                "name": "report_title",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "client_info",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Client Info",
+            "column": "A",
+            "search_range": "A3:A10"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "data_col_offset": 1,
+            "max_rows": 7,
+            "column_mappings": {
+              "Client Name": {
+                "name": "client_name",
+                "type": "text"
+              },
+              "Word Or Image": {
+                "name": "search_type",
+                "type": "text"
+              },
+              "SIC": {
+                "name": "sic_code",
+                "type": "text"
+              },
+              "Nature of business": {
+                "name": "business_nature",
+                "type": "text"
+              },
+              "Designated Countries": {
+                "name": "countries",
+                "type": "text"
+              },
+              "Search Platforms": {
+                "name": "platforms",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "word_search_criteria",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Word Search Criteria",
+            "column": "A",
+            "search_range": "A10:A20"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "data_col_offset": 1,
+            "max_rows": 6,
+            "column_mappings": {
+              "Exact Match": {
+                "name": "exact_match",
+                "type": "text"
+              },
+              "Similar Match": {
+                "name": "similar_match",
+                "type": "text"
+              },
+              "Start With": {
+                "name": "start_with",
+                "type": "text"
+              },
+              "Contains": {
+                "name": "contains",
+                "type": "text"
+              },
+              "Domain Search1": {
+                "name": "domain_search1",
+                "type": "text"
+              },
+              "Domain Search2": {
+                "name": "domain_search2",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "image_search_criteria",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Image Search Criteria",
+            "column": "A",
+            "search_range": "A15:A25"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "data_col_offset": 1,
+            "max_rows": 2,
+            "column_mappings": {
+              "Image Mark 1": {
+                "name": "image_mark_1",
+                "type": "image"
+              },
+              "Image Mark 2": {
+                "name": "image_mark_2",
+                "type": "image"
+              }
+            }
+          }
+        },
+        {
+          "name": "image_class",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Image Class.Division.Subdivision",
+            "column": "C",
+            "search_range": "C15:C30"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 1,
+            "column_mappings": {
+              "Image Class.Division.Subdivision": {
+                "name": "image_class",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "report_dates",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Date of Most Recent Search",
+            "column": "A",
+            "search_range": "A20:A50"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 3,
+            "column_mappings": {
+              "Date of Most Recent Search": {
+                "name": "last_search_date",
+                "type": "text"
+              },
+              "Date Report Produced": {
+                "name": "report_date",
+                "type": "text"
+              },
+              "Period Covered - All time or last 30 days": {
+                "name": "report_period",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "report_credentials",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Report Prepared By",
+            "column": "A",
+            "search_range": "A25:A50"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 2,
+            "column_mappings": {
+              "Report Prepared By": {
+                "name": "prepared_by",
+                "type": "text"
+              },
+              "Headshot": {
+                "name": "headshot",
+                "type": "image"
+              }
+            }
+          }
+        },
+        {
+          "name": "links",
+          "type": "key_value_pairs",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Links",
+            "column": "A",
+            "search_range": "A30:A40"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "data_col_offset": 1,
+            "max_rows": 2,
+            "column_mappings": {
+              "Client Portal": {
+                "name": "client_portal",
+                "type": "link"
+              },
+              "Booking Link": {
+                "name": "bookung_link",
+                "type": "link"
+              }
+            }
+          }
+        },
+        {
+          "name": "gs_classes_terms",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "G & S Classes",
+            "column": "A",
+            "search_range": "A20:A40"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 2,
+            "max_rows": 5,
+            "column_mappings": {
+              "G & S Classes": {
+                "name": "gs_classes",
+                "type": "text"
+              },
+              "G & S Terms": {
+                "name": "gs_terms",
+                "type": "text"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "TMH USE ONLY": {
+      "subtables": [
+        {
+          "name": "google_search",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Google results",
+            "column": "C",
+            "search_range": "C1:C10"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "headers_col_offset": -2,
+            "data_row_offset": 1,
+            "max_columns": 6,
+            "max_rows": 5,
+            "column_mappings": {
+              "Keywords/Images": {
+                "name": "keywords_images",
+                "type": "image"
+              },
+              "Results": {
+                "name": "result",
+                "type": "image"
+              },
+              "Links": {
+                "name": "link",
+                "type": "text"
+              },
+              "Search Date": {
+                "name": "search_date",
+                "type": "text"
+              },
+              "Risk Score": {
+                "name": "risk_score",
+                "type": "text"
+              },
+              "Remarks": {
+                "name": "remarks",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "company_search",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Company results",
+            "column": "C",
+            "search_range": "C5:C20"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "headers_col_offset": -2,
+            "data_row_offset": 1,
+            "max_columns": 9,
+            "max_rows": 5,
+            "column_mappings": {
+              "Keywords": {
+                "name": "keywords",
+                "type": "text"
+              },
+              "Company Name": {
+                "name": "company_name",
+                "type": "text"
+              },
+              "Link": {
+                "name": "link",
+                "type": "text"
+              },
+              "Status": {
+                "name": "status",
+                "type": "text"
+              },
+              "Company Number": {
+                "name": "company_number",
+                "type": "text"
+              },
+              "SIC": {
+                "name": "sic",
+                "type": "text"
+              },
+              "Search Date": {
+                "name": "search_date",
+                "type": "text"
+              },
+              "Risk Score": {
+                "name": "risk_score",
+                "type": "text"
+              },
+              "Remarks": {
+                "name": "remarks",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "domain_search",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Domain",
+            "column": "C",
+            "search_range": "C10:C30"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "headers_col_offset": -2,
+            "data_row_offset": 1,
+            "max_columns": 9,
+            "max_rows": 5,
+            "column_mappings": {
+              "Keywords": {
+                "name": "keywords",
+                "type": "text"
+              },
+              ".com": {
+                "name": "dot_com",
+                "type": "text"
+              },
+              ".net": {
+                "name": "dot_net",
+                "type": "text"
+              },
+              ".co.uk": {
+                "name": "dot_co_uk",
+                "type": "text"
+              },
+              ".co": {
+                "name": "dot_co",
+                "type": "text"
+              },
+              ".uk": {
+                "name": "dot_uk",
+                "type": "text"
+              },
+              "Search Date": {
+                "name": "search_date",
+                "type": "text"
+              },
+              "Risk Score": {
+                "name": "risk_score",
+                "type": "text"
+              },
+              "Remarks": {
+                "name": "remarks",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "social_search",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Socials",
+            "column": "C",
+            "search_range": "C20:C40"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "headers_col_offset": -2,
+            "data_row_offset": 1,
+            "max_columns": 10,
+            "max_rows": 5,
+            "column_mappings": {
+              "Keywords": {
+                "name": "keywords",
+                "type": "text"
+              },
+              "Facebool": {
+                "name": "facebook",
+                "type": "text"
+              },
+              "Instagram": {
+                "name": "instagram",
+                "type": "text"
+              },
+              "LinkedIn": {
+                "name": "linkedin",
+                "type": "text"
+              },
+              "TikTok": {
+                "name": "tiktok",
+                "type": "text"
+              },
+              "YouTube": {
+                "name": "youtube",
+                "type": "text"
+              },
+              "X": {
+                "name": "x",
+                "type": "text"
+              },
+              "Search Date": {
+                "name": "search_date",
+                "type": "text"
+              },
+              "Risk Score": {
+                "name": "risk_score",
+                "type": "text"
+              },
+              "Remarks": {
+                "name": "remarks",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "word_marks",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Word Marks",
+            "column": "C",
+            "search_range": "C20:C50"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "headers_col_offset": -2,
+            "data_row_offset": 1,
+            "max_columns": 18,
+            "max_rows": 11,
+            "column_mappings": {
+              "Office": {
+                "name": "office",
+                "type": "text"
+              },
+              "App Number": {
+                "name": "application_number",
+                "type": "text"
+              },
+              "Status": {
+                "name": "status",
+                "type": "text"
+              },
+              "Mark Tyoe": {
+                "name": "mark_type",
+                "type": "text"
+              },
+              "Image": {
+                "name": "image",
+                "type": "image"
+              },
+              "Mark Text": {
+                "name": "mark_text",
+                "type": "text"
+              },
+              "Filling Date": {
+                "name": "filling_date",
+                "type": "text"
+              },
+              "Classes": {
+                "name": "classes",
+                "type": "text"
+              },
+              "Owner Name": {
+                "name": "owner_name",
+                "type": "text"
+              },
+              "Owner Nationality": {
+                "name": "owner_nationality",
+                "type": "text"
+              },
+              "Owner Location": {
+                "name": "owner_location",
+                "type": "text"
+              },
+              "Industry": {
+                "name": "industry",
+                "type": "text"
+              },
+              "Primary Goods/Services": {
+                "name": "primary_goods_services",
+                "type": "text"
+              },
+              "Representative": {
+                "name": "representative",
+                "type": "text"
+              },
+              "Search Date": {
+                "name": "search_date",
+                "type": "text"
+              },
+              "Risk Score": {
+                "name": "risk_score",
+                "type": "text"
+              },
+              "Remarks": {
+                "name": "remarks",
+                "type": "text"
+              },
+              "Relevance": {
+                "name": "relevance",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "result_summary",
+          "type": "matrix_table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Result Summary",
+            "column": "A",
+            "search_range": "A40:A60"
+          },
+          "data_extraction": {
+            "headers_row_offset": 1,
+            "row_keys_col_offset": 0,
+            "data_row_offset": 1,
+            "data_col_offset": 1,
+            "max_columns": 2,
+            "max_rows": 5,
+            "row_key_mappings": {
+              "Google": "google_result",
+              "Company House": "company_house_result",
+              "Domains": "domains_result",
+              "Social Media": "social_media_result",
+              "Trademark Registers": "trademark_registers_result"
+            },
+            "column_mappings": {
+              "Total Results Flagged": {
+                "name": "total_results",
+                "type": "text"
+              },
+              "On This Report": {
+                "name": "this_report_results",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
+          "name": "threats_summary",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Threats Summary",
+            "column": "A",
+            "search_range": "A40:A60"
+          },
+          "data_extraction": {
+            "orientation": "vertical",
+            "headers_row_offset": 1,
+            "data_row_offset": 1,
+            "max_columns": 4,
+            "max_rows": 5,
+            "column_mappings": {
+              "Name of Threat": {
+                "name": "threat_name",
+                "type": "text"
+              },
+              "Where we found it": {
+                "name": "source",
+                "type": "text"
+              },
+              "Action Required?": {
+                "name": "action_required",
+                "type": "text"
+              },
+              "Suggested Action": {
+                "name": "suggested_action",
+                "type": "text"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "global_settings": {
+    "sharepoint": {
+      "enabled": true,
+      "tenant_id": "33df278d-d5db-4701-bccc-27da1047876d"
+    },
+    "normalize_keys": true,
+    "temp_file_cleanup": {
+      "enabled": true,
+      "delay_seconds": 300,
+      "keep_on_error": true,
+      "development_mode": false
+    },
+    "image_storage": {
+      "development_mode": {
+        "directory": "tests/fixtures/images",
+        "cleanup_after_merge": false
+      },
+      "production_mode": {
+        "directory": "temp/images",
+        "cleanup_after_merge": true
+      }
+    },
+    "image_extraction": {
+      "enabled": true,
+      "preserve_format": true,
+      "extract_position": true,
+      "fallback_format": "png",
+      "max_size_mb": 10,
+      "supported_formats": ["png", "jpg", "jpeg", "gif", "webp"],
+      "position_matching": {
+        "enabled": true,
+        "confidence_threshold": 0.3,
+        "prefer_position_over_index": true
+      }
+    },
+    "powerpoint": {
+      "dynamic_slides": {
+        "enabled": true,
+        "template_marker": "{{#list:",
+        "remove_template_slides": true,
+        "special_variables": {
+          "index": "$index",
+          "position": "$position",
+          "first": "$first",
+          "last": "$last",
+          "odd": "$odd",
+          "even": "$even"
+        },
+        "parent_context_prefix": "../",
+        "root_context_prefix": "$root."
+      },
+      "slide_filter": {
+        "include_slides": [],
+        "exclude_slides": []
+      },
+      "debug_mode": {
+        "save_position_info": true,
+        "log_anchor_details": true,
+        "create_summary": true
+      }
+    },
+    "validation": {
+      "strict_mode": false,
+      "allow_empty_values": true,
+      "required_fields": [],
+      "validate_image_placeholders": true
+    },
+    "powerpoint_processing": {
+      "image_placeholder_patterns": [
+        "\\{\\{.*image.*\\}\\}",
+        "\\{\\{.*img.*\\}\\}",
+        "\\{\\{.*photo.*\\}\\}",
+        "\\{\\{.*picture.*\\}\\}"
+      ],
+      "auto_resize_images": true,
+      "maintain_aspect_ratio": true,
+      "default_image_size": {
+        "width_inches": 2.0,
+        "height_inches": 2.0
+      }
+    }
+  }
+}

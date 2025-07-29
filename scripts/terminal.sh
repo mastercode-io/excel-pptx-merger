@@ -8,3 +8,5 @@ npx ccusage@latest daily
 
 4zPh5xK99smFYwafTGuZvuZrtsPPqH0I4
 4zPh5xK99smFYwafTGuZvuZrtsPPqH0I4
+
+{{#list:tabLe_name}}

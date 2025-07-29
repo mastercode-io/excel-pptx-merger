@@ -161,6 +161,27 @@ class ConfigManager:
                     "maintain_aspect_ratio": True,
                     "default_image_size": {"width_inches": 2.0, "height_inches": 2.0},
                 },
+                "powerpoint": {
+                    "dynamic_slides": {
+                        "enabled": True,
+                        "template_marker": "{{#list:",
+                        "remove_template_slides": True,
+                        "special_variables": {
+                            "index": "$index",
+                            "position": "$position",
+                            "first": "$first",
+                            "last": "$last",
+                            "odd": "$odd",
+                            "even": "$even",
+                        },
+                        "parent_context_prefix": "../",
+                        "root_context_prefix": "$root.",
+                    },
+                    "slide_filter": {
+                        "include_slides": [],
+                        "exclude_slides": [],
+                    },
+                },
             },
         }
 
@@ -526,6 +547,10 @@ class ConfigManager:
         if "range_images" in settings:
             self._validate_range_images_settings(settings["range_images"])
 
+        # Validate PowerPoint configuration
+        if "powerpoint" in settings:
+            self._validate_powerpoint_settings(settings["powerpoint"])
+
         if "powerpoint_processing" in settings:
             pptx_config = settings["powerpoint_processing"]
 
@@ -609,6 +634,85 @@ class ConfigManager:
             logger.info(
                 "Range images require SharePoint - will validate SharePoint config when used"
             )
+
+    def _validate_powerpoint_settings(self, powerpoint_config: Dict[str, Any]) -> None:
+        """Validate PowerPoint configuration."""
+        # Validate dynamic slides configuration
+        if "dynamic_slides" in powerpoint_config:
+            dynamic_config = powerpoint_config["dynamic_slides"]
+
+            # Validate template marker
+            if "template_marker" in dynamic_config:
+                marker = dynamic_config["template_marker"]
+                if not isinstance(marker, str) or not marker.strip():
+                    raise ConfigurationError(
+                        "Template marker must be a non-empty string"
+                    )
+                if not marker.startswith("{{") or ":" not in marker:
+                    raise ConfigurationError(
+                        "Template marker must follow format '{{#list:' or similar"
+                    )
+
+            # Validate special variables
+            if "special_variables" in dynamic_config:
+                special_vars = dynamic_config["special_variables"]
+                if not isinstance(special_vars, dict):
+                    raise ConfigurationError("Special variables must be a dictionary")
+
+                # Check for required special variables
+                required_vars = ["index", "position", "first", "last"]
+                for var in required_vars:
+                    if var not in special_vars:
+                        logger.warning(
+                            f"Missing special variable '{var}' in PowerPoint configuration"
+                        )
+
+            # Validate context prefixes
+            for prefix_key in ["parent_context_prefix", "root_context_prefix"]:
+                if prefix_key in dynamic_config:
+                    prefix = dynamic_config[prefix_key]
+                    if not isinstance(prefix, str) or not prefix.strip():
+                        raise ConfigurationError(
+                            f"{prefix_key} must be a non-empty string"
+                        )
+
+        # Validate slide filter configuration
+        if "slide_filter" in powerpoint_config:
+            filter_config = powerpoint_config["slide_filter"]
+
+            # Validate include_slides
+            if "include_slides" in filter_config:
+                include_list = filter_config["include_slides"]
+                if not isinstance(include_list, list):
+                    raise ConfigurationError("include_slides must be a list")
+
+                for slide_num in include_list:
+                    if not isinstance(slide_num, int) or slide_num < 1:
+                        raise ConfigurationError(
+                            "Slide numbers must be positive integers"
+                        )
+
+            # Validate exclude_slides
+            if "exclude_slides" in filter_config:
+                exclude_list = filter_config["exclude_slides"]
+                if not isinstance(exclude_list, list):
+                    raise ConfigurationError("exclude_slides must be a list")
+
+                for slide_num in exclude_list:
+                    if not isinstance(slide_num, int) or slide_num < 1:
+                        raise ConfigurationError(
+                            "Slide numbers must be positive integers"
+                        )
+
+            # Check for conflicting configuration
+            include_list = filter_config.get("include_slides", [])
+            exclude_list = filter_config.get("exclude_slides", [])
+            if include_list and exclude_list:
+                conflicting = set(include_list) & set(exclude_list)
+                if conflicting:
+                    raise ConfigurationError(
+                        f"Slides cannot be both included and excluded: {list(conflicting)}"
+                    )
 
     def clear_cache(self) -> None:
         """Clear configuration cache."""
