@@ -53,10 +53,6 @@
                 "name": "search_type",
                 "type": "text"
               },
-              "G&S Classes": {
-                "name": "gs_classes",
-                "type": "text"
-              },
               "SIC": {
                 "name": "sic_code",
                 "type": "text"
@@ -147,20 +143,25 @@
           }
         },
         {
-          "name": "gs_terms",
-          "type": "key_value_pairs",
+          "name": "gs_classes_terms",
+          "type": "table",
           "header_search": {
             "method": "contains_text",
-            "text": "G&S Terms",
+            "text": "G&S Classes",
             "column": "A",
-            "search_range": "A20:A30"
+            "search_range": "A20:A40"
           },
           "data_update": {
-            "orientation": "horizontal",
             "headers_row_offset": 0,
             "data_row_offset": 1,
-            "max_columns": 1,
+            "max_columns": 10,
+            "max_expansion_rows": 50,
+            "expansion_behavior": "preserve_below",
             "column_mappings": {
+              "G&S Classes": {
+                "name": "gs_classes",
+                "type": "text"
+              },
               "G&S Terms": {
                 "name": "gs_terms",
                 "type": "text"
@@ -175,7 +176,7 @@
             "method": "contains_text",
             "text": "Links",
             "column": "A",
-            "search_range": "A30:A40"
+            "search_range": "A30:A80"
           },
           "data_update": {
             "orientation": "vertical",

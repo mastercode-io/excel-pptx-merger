@@ -269,6 +269,41 @@ Development mode saves debug information including extracted data and copies of 
 3. **Storage Layer Improvements**: Fixed GCS Content-Type handling and added Local/GCS abstraction
 4. **SharePoint Integration**: Centralized file handler for all endpoints
 5. **Code Reuse Architecture**: Zero duplication between sync/async processing paths
+6. **Unlimited Row Update**: Tables can expand beyond original size with content preservation
+7. **Style Copying**: Automatic formatting replication from first row to new rows
+
+### Excel Update Features
+
+#### Unlimited Row Update
+Tables can now expand beyond their original size while preserving content below:
+- Two-phase processing detects all tables before updates
+- Full row shifting maintains document structure
+- Formulas, formatting, and merged cells are preserved
+- Configuration: `max_expansion_rows` limits expansion (default: 1000)
+
+#### Style Copying During Table Expansion
+When tables expand, formatting from the first data row is automatically copied:
+
+**Copied Elements:**
+- Font properties (bold, italic, color, size)
+- Cell alignment (horizontal, vertical, text wrap)
+- Fill colors and patterns
+- Cell borders
+- Number formats (currency, date, etc.)
+- Row height
+- Merged cell patterns
+
+**Configuration:**
+```json
+{
+  "data_update": {
+    "copy_first_row_style": true,  // Default: true
+    "column_mappings": {
+      "Column1": {"name": "field1", "type": "text"}
+    }
+  }
+}
+```
 
 ### PowerPoint Processing Features
 

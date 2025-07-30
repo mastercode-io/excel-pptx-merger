@@ -6,6 +6,7 @@ import io
 import uuid
 import re
 import base64
+import copy
 import requests
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -64,7 +65,7 @@ class ExcelUpdater:
             sheets_to_update = set(config.get("sheet_configs", {}).keys())
             self._log_info(f"Sheets to be updated: {sheets_to_update}")
 
-            # Process each sheet
+            # Process each sheet using two-phase approach
             for sheet_name, sheet_config in config.get("sheet_configs", {}).items():
                 if sheet_name not in self.workbook.sheetnames:
                     self._log_error(f"Sheet '{sheet_name}' not found in workbook")
@@ -73,9 +74,11 @@ class ExcelUpdater:
                 sheet = self.workbook[sheet_name]
                 self._log_info(f"Processing sheet: {sheet_name}")
 
-                # Process each subtable in the sheet
-                for subtable_config in sheet_config.get("subtables", []):
-                    self._update_subtable(sheet, subtable_config, update_data)
+                # Phase 1: Detect all subtables before making any changes
+                detected_subtables = self._detect_all_subtables(sheet, sheet_config)
+                
+                # Phase 2: Process subtables in correct order with position tracking
+                self._process_subtables_in_order(sheet, detected_subtables, update_data)
 
             # Verify non-updated sheets remain intact
             for sheet_name in self.workbook.sheetnames:
@@ -280,14 +283,38 @@ class ExcelUpdater:
         config: Dict[str, Any],
         data: List[Dict[str, Any]],
     ) -> None:
-        """Update table data with offset support."""
+        """Update table data with offset support and optional style copying."""
         column_mappings = config["column_mappings"]
         orientation = config.get("orientation", "vertical")
         data_row_offset = config.get("data_row_offset", 1)
+        copy_first_row_style = config.get("copy_first_row_style", True)
 
         if orientation == "vertical":
             # Start data from base_row + data_row_offset
             data_start_row = base_row + data_row_offset
+            
+            # First, determine all column positions we'll be updating
+            column_positions = {}
+            for mapping_key in column_mappings.keys():
+                header_col = self._find_header_column(
+                    sheet, base_row, mapping_key, config, base_col
+                )
+                if header_col:
+                    column_positions[mapping_key] = header_col
+                elif self._is_column_letter(mapping_key):
+                    column_positions[mapping_key] = column_index_from_string(mapping_key)
+            
+            # Capture styles from the first data row if it exists and option is enabled
+            captured_styles = None
+            if copy_first_row_style and data_start_row <= sheet.max_row:
+                columns_to_capture = list(column_positions.values())
+                if columns_to_capture:
+                    captured_styles = self._capture_row_styles(
+                        sheet, data_start_row, columns_to_capture
+                    )
+                    self._log_info(
+                        f"Captured styles from row {data_start_row} for {len(columns_to_capture)} columns"
+                    )
 
             for row_idx, row_data in enumerate(data):
                 current_row = data_start_row + row_idx
@@ -296,27 +323,33 @@ class ExcelUpdater:
                     field_name = field_config["name"]
                     field_type = field_config["type"]
 
-                    if field_name in row_data:
-                        # Handle both column letters and header names
-                        if self._is_column_letter(mapping_key):
-                            # Direct column (e.g., "A")
-                            cell_address = f"{mapping_key}{current_row}"
-                        else:
-                            # Header name - find the column
-                            header_col = self._find_header_column(
-                                sheet, base_row, mapping_key, config, base_col
-                            )
-                            if header_col:
-                                cell_address = (
-                                    f"{get_column_letter(header_col)}{current_row}"
-                                )
-                            else:
-                                self._log_error(f"Header '{mapping_key}' not found")
-                                continue
-
+                    if field_name in row_data and mapping_key in column_positions:
+                        col_idx = column_positions[mapping_key]
+                        cell_address = f"{get_column_letter(col_idx)}{current_row}"
+                        
+                        # Update the cell value
                         self._update_cell(
                             sheet, cell_address, row_data[field_name], field_type
                         )
+                        
+                        # Apply captured style if available (skip first row as it already has the style)
+                        if captured_styles and row_idx > 0 and col_idx in captured_styles:
+                            cell = sheet[cell_address]
+                            self._apply_cell_style(cell, captured_styles[col_idx])
+                
+                # Apply row height if captured
+                if captured_styles and row_idx > 0 and captured_styles.get("row_height"):
+                    sheet.row_dimensions[current_row].height = captured_styles["row_height"]
+                
+                # Apply merged cells pattern if captured
+                if captured_styles and row_idx > 0 and captured_styles.get("merged_cells"):
+                    for merge_info in captured_styles["merged_cells"]:
+                        merge_range = f"{get_column_letter(merge_info['min_col'])}{current_row}:" \
+                                    f"{get_column_letter(merge_info['max_col'])}{current_row}"
+                        try:
+                            sheet.merge_cells(merge_range)
+                        except:
+                            pass  # Skip if merge fails
 
     def _update_matrix_table_with_offsets(
         self,
@@ -427,6 +460,76 @@ class ExcelUpdater:
                 # Update the cell
                 cell_address = f"{get_column_letter(target_col)}{target_row}"
                 self._update_cell(sheet, cell_address, value, field_type)
+
+    def _capture_row_styles(
+        self, sheet: Worksheet, row: int, columns: List[int]
+    ) -> Dict[int, Dict[str, Any]]:
+        """
+        Capture all formatting styles from specified columns in a row.
+        
+        Args:
+            sheet: Excel worksheet
+            row: Row number to capture styles from
+            columns: List of column indices to capture
+            
+        Returns:
+            Dictionary mapping column index to style properties
+        """
+        styles = {}
+        
+        for col in columns:
+            cell = sheet.cell(row=row, column=col)
+            
+            # Capture all style properties
+            style_info = {
+                "font": copy.copy(cell.font) if cell.font else None,
+                "fill": copy.copy(cell.fill) if cell.fill else None,
+                "border": copy.copy(cell.border) if cell.border else None,
+                "alignment": copy.copy(cell.alignment) if cell.alignment else None,
+                "number_format": cell.number_format if cell.number_format else None,
+            }
+            
+            styles[col] = style_info
+            
+        # Also capture row height
+        styles["row_height"] = sheet.row_dimensions[row].height
+        
+        # Capture merged cell information for this row
+        merged_ranges = []
+        for merged_range in sheet.merged_cells.ranges:
+            if merged_range.min_row == row and merged_range.max_row == row:
+                merged_ranges.append({
+                    "min_col": merged_range.min_col,
+                    "max_col": merged_range.max_col
+                })
+        styles["merged_cells"] = merged_ranges
+        
+        return styles
+    
+    def _apply_cell_style(
+        self, cell, style_info: Dict[str, Any]
+    ) -> None:
+        """
+        Apply captured style to a cell.
+        
+        Args:
+            cell: The cell to apply styles to
+            style_info: Dictionary containing style properties
+        """
+        if style_info.get("font"):
+            cell.font = style_info["font"]
+        
+        if style_info.get("fill"):
+            cell.fill = style_info["fill"]
+        
+        if style_info.get("border"):
+            cell.border = style_info["border"]
+        
+        if style_info.get("alignment"):
+            cell.alignment = style_info["alignment"]
+        
+        if style_info.get("number_format"):
+            cell.number_format = style_info["number_format"]
 
     def _update_cell(
         self, sheet: Worksheet, cell_address: str, value: Any, field_type: str
@@ -860,6 +963,617 @@ class ExcelUpdater:
         except Exception:
             raise ValueError(f"Invalid cell address: {cell_address}")
 
+    def _detect_all_subtables(
+        self, sheet: Worksheet, sheet_config: Dict[str, Any]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Detect all subtables before making any modifications.
+        
+        Returns:
+            Dictionary mapping subtable names to their detection info:
+            {
+                "subtable_name": {
+                    "location": {"row": int, "col": int, "found": bool},
+                    "type": str,
+                    "priority": int,
+                    "config": dict
+                }
+            }
+        """
+        detected_subtables = {}
+        
+        for subtable_config in sheet_config.get("subtables", []):
+            subtable_name = subtable_config["name"]
+            subtable_type = subtable_config["type"]
+            
+            # Skip if no data_update configuration
+            if "data_update" not in subtable_config:
+                self._log_info(
+                    f"Skipping detection for '{subtable_name}' - no data_update configuration"
+                )
+                continue
+            
+            # Find starting location
+            location = self._find_update_location(sheet, subtable_config["header_search"])
+            
+            if location["found"]:
+                # Determine processing priority based on type
+                priority = self._determine_processing_order(subtable_type)
+                
+                detected_subtables[subtable_name] = {
+                    "location": location,
+                    "type": subtable_type,
+                    "priority": priority,
+                    "config": subtable_config
+                }
+                self._log_info(
+                    f"Detected subtable '{subtable_name}' at {location['address']} "
+                    f"(type: {subtable_type}, priority: {priority})"
+                )
+            else:
+                self._log_error(f"Could not detect location for subtable '{subtable_name}'")
+                # Still add to detected list with not found status
+                detected_subtables[subtable_name] = {
+                    "location": location,
+                    "type": subtable_type,
+                    "priority": 999,  # Low priority for not found
+                    "config": subtable_config
+                }
+        
+        return detected_subtables
+
+    def _determine_processing_order(self, subtable_type: str) -> int:
+        """
+        Determine processing priority based on subtable type.
+        
+        Priority 1: Fixed-size tables (process first)
+        Priority 2: Expandable tables (process after fixed tables)
+        
+        Args:
+            subtable_type: Type of subtable (key_value_pairs, matrix_table, table)
+            
+        Returns:
+            Priority number (lower = higher priority)
+        """
+        if subtable_type in ["key_value_pairs", "matrix_table"]:
+            return 1  # Fixed-size tables
+        elif subtable_type == "table":
+            return 2  # Expandable tables
+        else:
+            return 3  # Unknown types (process last)
+
+    def _process_subtables_in_order(
+        self,
+        sheet: Worksheet,
+        detected_subtables: Dict[str, Dict[str, Any]],
+        update_data: Dict[str, Any],
+    ) -> None:
+        """
+        Process subtables in correct order with position tracking.
+        
+        Args:
+            sheet: Excel worksheet
+            detected_subtables: Dictionary of detected subtables with metadata
+            update_data: Data to update in the subtables
+        """
+        # Sort subtables by priority (lower number = higher priority)
+        sorted_subtables = sorted(
+            detected_subtables.items(),
+            key=lambda x: (x[1]["priority"], x[0])  # Sort by priority, then name
+        )
+        
+        # Track cumulative row shifts for position adjustment
+        cumulative_row_shift = 0
+        
+        for subtable_name, subtable_info in sorted_subtables:
+            if not subtable_info["location"]["found"]:
+                self._log_warning(f"Skipping '{subtable_name}' - location not found")
+                continue
+            
+            # Skip if no data provided for this subtable
+            if subtable_name not in update_data:
+                self._log_warning(f"No data provided for subtable '{subtable_name}'")
+                continue
+            
+            # Adjust location based on cumulative shifts from previous updates
+            adjusted_location = self._adjust_location_for_shifts(
+                subtable_info["location"], cumulative_row_shift
+            )
+            
+            self._log_info(
+                f"Processing subtable '{subtable_name}' at adjusted location "
+                f"row={adjusted_location['row']} (shift={cumulative_row_shift})"
+            )
+            
+            # Update the subtable and get expansion amount
+            expansion_rows = self._update_subtable_with_expansion(
+                sheet,
+                subtable_info["config"],
+                update_data[subtable_name],
+                adjusted_location,
+                cumulative_row_shift
+            )
+            
+            # Update cumulative shift for next subtables
+            if expansion_rows != 0:
+                cumulative_row_shift += expansion_rows
+                self._log_info(
+                    f"Subtable '{subtable_name}' expanded by {expansion_rows} rows. "
+                    f"Total shift: {cumulative_row_shift}"
+                )
+
+    def _adjust_location_for_shifts(
+        self, original_location: Dict[str, Any], cumulative_shift: int
+    ) -> Dict[str, Any]:
+        """
+        Adjust subtable location based on previous expansions.
+        
+        Args:
+            original_location: Original location dictionary
+            cumulative_shift: Number of rows to shift down
+            
+        Returns:
+            Adjusted location dictionary
+        """
+        adjusted_location = original_location.copy()
+        
+        if cumulative_shift != 0:
+            # Adjust row position
+            adjusted_location["row"] = original_location["row"] + cumulative_shift
+            
+            # Update cell address if present
+            if "address" in original_location and original_location["address"]:
+                col_letter = get_column_letter(original_location["col"])
+                adjusted_location["address"] = f"{col_letter}{adjusted_location['row']}"
+        
+        return adjusted_location
+
+    def _detect_table_boundaries(
+        self,
+        sheet: Worksheet,
+        data_start_row: int,
+        data_start_col: int,
+        column_count: int,
+        max_rows: int = 1000,
+    ) -> Tuple[int, bool, Optional[range]]:
+        """
+        Detect where table ends using consecutive empty row logic.
+        
+        Args:
+            sheet: Excel worksheet
+            data_start_row: Row where table data starts
+            data_start_col: Column where table starts
+            column_count: Number of columns in the table
+            max_rows: Maximum rows to scan
+            
+        Returns:
+            Tuple of (table_end_row, content_exists_below, affected_columns_range)
+        """
+        consecutive_empty_rows = 0
+        table_end_row = data_start_row
+        
+        # Scan rows to find table end
+        for row_offset in range(max_rows):
+            current_row = data_start_row + row_offset
+            
+            # Check if we've gone beyond the sheet bounds
+            if current_row > sheet.max_row:
+                break
+            
+            # Check if entire row is empty
+            row_is_empty = True
+            for col_offset in range(column_count):
+                cell = sheet.cell(row=current_row, column=data_start_col + col_offset)
+                if cell.value is not None and str(cell.value).strip():
+                    row_is_empty = False
+                    break
+            
+            if row_is_empty:
+                consecutive_empty_rows += 1
+                # Stop after 2-3 consecutive empty rows (matching extract logic)
+                if consecutive_empty_rows >= 2:
+                    table_end_row = current_row - consecutive_empty_rows
+                    break
+            else:
+                consecutive_empty_rows = 0
+                table_end_row = current_row
+        
+        # Check if there's content below the table
+        content_exists_below = False
+        # If we found empty rows, skip them; otherwise check immediately after table end
+        first_content_row = table_end_row + max(consecutive_empty_rows, 1) + 1
+        
+        # Scan a reasonable range below table to check for content
+        for row in range(first_content_row, min(first_content_row + 50, sheet.max_row + 1)):
+            for col in sheet[row]:
+                if col.value is not None and str(col.value).strip():
+                    content_exists_below = True
+                    break
+            if content_exists_below:
+                break
+        
+        # Define affected columns range
+        affected_columns = range(data_start_col, data_start_col + column_count)
+        
+        self._log_info(
+            f"Table boundaries: ends at row {table_end_row}, "
+            f"content below: {content_exists_below}, "
+            f"columns {data_start_col}-{data_start_col + column_count - 1}"
+        )
+        
+        return table_end_row, content_exists_below, affected_columns
+
+    def _preserve_content_below_table(
+        self,
+        sheet: Worksheet,
+        table_end_row: int,
+        affected_columns: range,
+        preserve_to_row: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Extract all content below table for later restoration.
+        Preserves entire rows to maintain document structure.
+        
+        Args:
+            sheet: Excel worksheet
+            table_end_row: Last row of the table
+            affected_columns: Range of columns affected by the table (kept for API compatibility)
+            preserve_to_row: Optional end row for preservation (default: sheet.max_row)
+            
+        Returns:
+            Dictionary containing preserved content from all columns
+        """
+        preserved_content = {
+            "cells": {},
+            "merged_cells": [],
+            "row_heights": {},
+            "images": []
+        }
+        
+        start_row = table_end_row + 1
+        end_row = preserve_to_row or sheet.max_row
+        
+        # Preserve cell data and formatting for entire rows
+        for row in range(start_row, end_row + 1):
+            # Preserve all columns in the row, not just affected columns
+            for col in range(1, sheet.max_column + 1):
+                cell = sheet.cell(row=row, column=col)
+                
+                # Skip empty cells
+                if cell.value is None and not cell.has_style:
+                    continue
+                
+                cell_data = {
+                    "value": cell.value,
+                    "data_type": cell.data_type,
+                }
+                
+                # Preserve formula if present
+                if cell.data_type == 'f':
+                    cell_data["formula"] = cell.value
+                
+                # Preserve formatting
+                if cell.has_style:
+                    cell_data["font"] = copy.copy(cell.font)
+                    cell_data["fill"] = copy.copy(cell.fill)
+                    cell_data["border"] = copy.copy(cell.border)
+                    cell_data["alignment"] = copy.copy(cell.alignment)
+                    cell_data["number_format"] = cell.number_format
+                
+                cell_address = f"{get_column_letter(col)}{row}"
+                preserved_content["cells"][cell_address] = cell_data
+        
+        # Preserve merged cells in affected rows (all columns)
+        for merged_range in sheet.merged_cells.ranges:
+            if merged_range.min_row >= start_row:
+                preserved_content["merged_cells"].append({
+                    "range": str(merged_range),
+                    "min_row": merged_range.min_row,
+                    "max_row": merged_range.max_row,
+                    "min_col": merged_range.min_col,
+                    "max_col": merged_range.max_col
+                })
+        
+        # Preserve row heights
+        for row in range(start_row, end_row + 1):
+            if sheet.row_dimensions[row].height:
+                preserved_content["row_heights"][row] = sheet.row_dimensions[row].height
+        
+        # Preserve images in affected area
+        if hasattr(sheet, '_images'):
+            for img in sheet._images:
+                # Check if image is in preserved area
+                if hasattr(img, 'anchor') and img.anchor:
+                    # Extract position from anchor
+                    cell_ref = str(img.anchor).split('!')[0] if '!' in str(img.anchor) else str(img.anchor)
+                    if cell_ref:
+                        try:
+                            img_col, img_row = coordinate_from_string(cell_ref)
+                            img_col_idx = column_index_from_string(img_col)
+                            if img_row >= start_row:
+                                preserved_content["images"].append({
+                                    "image": img,
+                                    "anchor": str(img.anchor),
+                                    "row": img_row,
+                                    "col": img_col_idx
+                                })
+                        except:
+                            pass  # Skip if we can't parse the anchor
+        
+        self._log_info(
+            f"Preserved content: {len(preserved_content['cells'])} cells, "
+            f"{len(preserved_content['merged_cells'])} merged ranges, "
+            f"{len(preserved_content['images'])} images"
+        )
+        
+        return preserved_content
+
+    def _restore_preserved_content(
+        self,
+        sheet: Worksheet,
+        preserved_content: Dict[str, Any],
+        row_shift: int,
+    ) -> None:
+        """
+        Restore preserved content at shifted positions.
+        
+        Args:
+            sheet: Excel worksheet
+            preserved_content: Dictionary with preserved content
+            row_shift: Number of rows to shift content down
+        """
+        if row_shift == 0:
+            self._log_info("No row shift needed, skipping content restoration")
+            return
+        
+        self._log_info(f"Restoring preserved content with row shift of {row_shift}")
+        
+        # First, unmerge any cells that will be affected
+        for merged_info in preserved_content["merged_cells"]:
+            try:
+                sheet.unmerge_cells(merged_info["range"])
+            except:
+                pass  # Cell might already be unmerged
+        
+        # Restore cell data with shifted positions
+        for original_address, cell_data in preserved_content["cells"].items():
+            # Parse original position
+            col_letter, row = coordinate_from_string(original_address)
+            col_idx = column_index_from_string(col_letter)
+            
+            # Calculate new position
+            new_row = row + row_shift
+            new_address = f"{col_letter}{new_row}"
+            
+            # Get target cell
+            target_cell = sheet.cell(row=new_row, column=col_idx)
+            
+            # Restore value (with formula reference updates if needed)
+            if cell_data.get("data_type") == 'f' and cell_data.get("formula"):
+                # Update formula references
+                updated_formula = self._update_formula_references(
+                    cell_data["formula"], row_shift
+                )
+                target_cell.value = updated_formula
+                target_cell.data_type = 'f'
+            else:
+                target_cell.value = cell_data["value"]
+                if "data_type" in cell_data:
+                    target_cell.data_type = cell_data["data_type"]
+            
+            # Restore formatting
+            if "font" in cell_data:
+                target_cell.font = cell_data["font"]
+            if "fill" in cell_data:
+                target_cell.fill = cell_data["fill"]
+            if "border" in cell_data:
+                target_cell.border = cell_data["border"]
+            if "alignment" in cell_data:
+                target_cell.alignment = cell_data["alignment"]
+            if "number_format" in cell_data:
+                target_cell.number_format = cell_data["number_format"]
+        
+        # Re-merge cells at new positions
+        for merged_info in preserved_content["merged_cells"]:
+            new_min_row = merged_info["min_row"] + row_shift
+            new_max_row = merged_info["max_row"] + row_shift
+            
+            new_range = f"{get_column_letter(merged_info['min_col'])}{new_min_row}:" \
+                       f"{get_column_letter(merged_info['max_col'])}{new_max_row}"
+            
+            try:
+                sheet.merge_cells(new_range)
+            except Exception as e:
+                self._log_warning(f"Failed to merge cells {new_range}: {e}")
+        
+        # Restore row heights
+        for original_row, height in preserved_content["row_heights"].items():
+            new_row = original_row + row_shift
+            sheet.row_dimensions[new_row].height = height
+        
+        # Restore images at new positions
+        for img_info in preserved_content["images"]:
+            try:
+                # Update anchor position
+                new_row = img_info["row"] + row_shift
+                new_anchor = f"{get_column_letter(img_info['col'])}{new_row}"
+                
+                # Re-add image with new anchor
+                img = img_info["image"]
+                img.anchor = new_anchor
+                # Note: Image might already be in sheet._images, just updating anchor
+                
+            except Exception as e:
+                self._log_warning(f"Failed to reposition image: {e}")
+        
+        self._log_info(
+            f"Content restoration complete: {len(preserved_content['cells'])} cells, "
+            f"{len(preserved_content['merged_cells'])} merged ranges"
+        )
+
+    def _update_formula_references(self, formula: str, row_shift: int) -> str:
+        """
+        Update cell references in formula to account for row shift.
+        
+        Args:
+            formula: Original formula string
+            row_shift: Number of rows to shift references
+            
+        Returns:
+            Updated formula with shifted references
+        """
+        # Pattern to match cell references (e.g., A1, $B$2, Sheet1!C3)
+        cell_ref_pattern = r'(\$?[A-Z]+\$?)(\d+)'
+        
+        def update_reference(match):
+            col_part = match.group(1)
+            row_part = int(match.group(2))
+            
+            # Don't update absolute row references (with $)
+            if '$' in match.group(0).split(col_part)[1]:
+                return match.group(0)
+            
+            # Update row number
+            new_row = row_part + row_shift
+            return f"{col_part}{new_row}"
+        
+        # Update all cell references in the formula
+        updated_formula = re.sub(cell_ref_pattern, update_reference, formula)
+        
+        return updated_formula
+
+    def _update_subtable_with_expansion(
+        self,
+        sheet: Worksheet,
+        subtable_config: Dict[str, Any],
+        data: Any,
+        adjusted_location: Dict[str, Any],
+        cumulative_shift: int,
+    ) -> int:
+        """
+        Update subtable with support for unlimited row expansion.
+        
+        Args:
+            sheet: Excel worksheet
+            subtable_config: Subtable configuration
+            data: Data to update
+            adjusted_location: Location adjusted for previous shifts
+            cumulative_shift: Total shift from previous expansions
+            
+        Returns:
+            Number of rows expanded (positive) or contracted (negative)
+        """
+        subtable_name = subtable_config["name"]
+        subtable_type = subtable_config["type"]
+        update_config = subtable_config["data_update"]
+        
+        # Apply offsets to starting location
+        base_row = adjusted_location["row"] + update_config.get("headers_row_offset", 0)
+        base_col = adjusted_location["col"] + update_config.get("headers_col_offset", 0)
+        
+        # For table type, check if expansion is needed
+        if subtable_type == "table" and isinstance(data, list):
+            # Get table configuration
+            data_row_offset = update_config.get("data_row_offset", 1)
+            data_start_row = base_row + data_row_offset
+            
+            # Detect current table boundaries
+            column_count = len(update_config.get("column_mappings", {}))
+            max_rows = update_config.get("max_rows", 1000)
+            
+            self._log_info(
+                f"Detecting boundaries for table at row {data_start_row}, col {base_col}, "
+                f"with {column_count} columns"
+            )
+            
+            table_end_row, content_below, affected_columns = self._detect_table_boundaries(
+                sheet, data_start_row, base_col, column_count, max_rows
+            )
+            
+            # Calculate expansion needed
+            current_table_rows = table_end_row - data_start_row + 1
+            new_data_rows = len(data)
+            expansion_rows = new_data_rows - current_table_rows
+            
+            self._log_info(
+                f"Table '{subtable_name}': current rows={current_table_rows}, "
+                f"new rows={new_data_rows}, expansion={expansion_rows}"
+            )
+            
+            # Handle expansion if needed
+            if expansion_rows > 0 and content_below:
+                # Check expansion limits
+                max_expansion = update_config.get("max_expansion_rows", 1000)
+                if expansion_rows > max_expansion:
+                    self._log_error(
+                        f"Expansion of {expansion_rows} rows exceeds limit of {max_expansion}"
+                    )
+                    expansion_rows = max_expansion
+                
+                # Preserve content below table
+                preserved_content = self._preserve_content_below_table(
+                    sheet, table_end_row, affected_columns
+                )
+                
+                # Clear entire rows in the expansion area (where preserved content currently is)
+                clear_start_row = table_end_row + 1
+                clear_end_row = table_end_row + expansion_rows
+                
+                # First, unmerge any cells in the area we're about to clear
+                merged_ranges_to_remove = []
+                for merged_range in sheet.merged_cells.ranges:
+                    if (merged_range.min_row >= clear_start_row and 
+                        merged_range.min_row <= clear_end_row):
+                        merged_ranges_to_remove.append(str(merged_range))
+                
+                for range_str in merged_ranges_to_remove:
+                    try:
+                        sheet.unmerge_cells(range_str)
+                    except:
+                        pass  # Ignore if already unmerged
+                
+                # Now clear all columns in the rows
+                for row in range(clear_start_row, clear_end_row + 1):
+                    for col in range(1, sheet.max_column + 1):
+                        try:
+                            sheet.cell(row=row, column=col).value = None
+                        except AttributeError:
+                            # Skip if it's a merged cell that we couldn't unmerge
+                            pass
+                
+                # Update the table with new data
+                self._update_table_with_offsets(
+                    sheet, base_row, base_col, update_config, data
+                )
+                
+                # Restore preserved content at new positions
+                self._restore_preserved_content(sheet, preserved_content, expansion_rows)
+                
+                return expansion_rows
+            else:
+                # No expansion needed or no content below - update normally
+                self._update_table_with_offsets(
+                    sheet, base_row, base_col, update_config, data
+                )
+                return 0
+        else:
+            # Non-expandable table types - update normally
+            if subtable_type == "key_value_pairs":
+                self._update_key_value_pairs_with_offsets(
+                    sheet, base_row, base_col, update_config, data
+                )
+            elif subtable_type == "matrix_table":
+                self._update_matrix_table_with_offsets(
+                    sheet, base_row, base_col, update_config, data
+                )
+            else:
+                # Default table update (no expansion)
+                self._update_table_with_offsets(
+                    sheet, base_row, base_col, update_config, data
+                )
+            
+            return 0  # No expansion for fixed-size tables
+
     def _validate_update_config(self, config: Dict[str, Any]) -> None:
         """Validate update configuration structure."""
         if "sheet_configs" not in config:
@@ -918,6 +1632,27 @@ class ExcelUpdater:
                         raise ValidationError(
                             f"column_mappings required in data_update for {subtable['name']}"
                         )
+                    
+                    # Validate new optional fields
+                    if "max_expansion_rows" in data_update:
+                        max_exp = data_update["max_expansion_rows"]
+                        if not isinstance(max_exp, int) or max_exp <= 0:
+                            raise ValidationError(
+                                f"max_expansion_rows must be a positive integer in {subtable['name']}"
+                            )
+                    
+                    if "expansion_behavior" in data_update:
+                        valid_behaviors = ["preserve_below", "overwrite", "error"]
+                        if data_update["expansion_behavior"] not in valid_behaviors:
+                            raise ValidationError(
+                                f"expansion_behavior must be one of {valid_behaviors} in {subtable['name']}"
+                            )
+                    
+                    if "copy_first_row_style" in data_update:
+                        if not isinstance(data_update["copy_first_row_style"], bool):
+                            raise ValidationError(
+                                f"copy_first_row_style must be a boolean in {subtable['name']}"
+                            )
 
     def _add_update_log_sheet(self) -> None:
         """Create diagnostic sheet with update results."""
