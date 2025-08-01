@@ -2104,6 +2104,10 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
         update_data = None
         config = None
         include_update_log = False
+        operation = "update"  # Default to "update" for backward compatibility
+        source_excel_file = None
+        source_excel_data = None
+        sheet_names = []
 
         # Get SharePoint info from request (supports both naming conventions)
         sharepoint_url, sharepoint_item_id = parser.get_sharepoint_info()
@@ -2130,11 +2134,59 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
                 400,
             )
 
-        # Get update data, config, and include_update_log parameters
+        # Get operation parameter
         try:
-            update_data = parser.get_json_param(
-                "update_data", default={}, required=True
-            )
+            operation = parser.get_param("operation", default="update")
+            if operation not in ["update", "add_sheets", "delete_sheets"]:
+                return create_error_response(
+                    ValidationError(
+                        f"Invalid operation '{operation}'. Must be one of: update, add_sheets, delete_sheets"
+                    ),
+                    400,
+                )
+            logger.info(f"Operation type: {operation}")
+
+            # Get parameters based on operation type
+            if operation == "update":
+                # For update operation, update_data is required
+                update_data = parser.get_json_param(
+                    "update_data", default={}, required=True
+                )
+            else:
+                # For sheet operations, update_data is not required
+                update_data = parser.get_json_param(
+                    "update_data", default={}, required=False
+                )
+                
+                # For add_sheets, check for new sheet_operations format first
+                sheet_positions = None
+                if operation == "add_sheets":
+                    sheet_operations = parser.get_json_param(
+                        "sheet_operations", default=None, required=False
+                    )
+                    
+                    if sheet_operations:
+                        # New format with positions
+                        sheet_names = [op["name"] for op in sheet_operations]
+                        sheet_positions = {op["name"]: op.get("position") for op in sheet_operations}
+                        logger.info(f"Using sheet_operations format with positions: {sheet_positions}")
+                    else:
+                        # Legacy format - just sheet names
+                        sheet_names = parser.get_json_param(
+                            "sheet_names", default=[], required=True
+                        )
+                else:
+                    # For delete_sheets, only support simple sheet_names
+                    sheet_names = parser.get_json_param(
+                        "sheet_names", default=[], required=True
+                    )
+                
+                if not sheet_names:
+                    return create_error_response(
+                        ValidationError("sheet_names or sheet_operations cannot be empty"),
+                        400,
+                    )
+                
             config = parser.get_json_param("config", default={}, required=False)
 
             # For include_update_log, handle both boolean and string representations
@@ -2158,8 +2210,22 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
             logger.error(f"Invalid parameters: {e}")
             return create_error_response(e, 400)
 
+        # Handle source_excel_file for add_sheets operation
+        if operation == "add_sheets":
+            try:
+                source_excel_file = parser.get_file("source_excel_file", required=True)
+                source_excel_data = parser.get_file_data(source_excel_file)
+                logger.info(f"Source Excel file provided: {source_excel_file.filename}")
+            except ValidationError as e:
+                return create_error_response(
+                    ValidationError("source_excel_file or source_excel_file_base64 is required for add_sheets operation"),
+                    400,
+                )
+
         logger.info(
-            f"Update request - Update data fields: {list(update_data.keys()) if isinstance(update_data, dict) else 'not a dict'}"
+            f"Update request - Operation: {operation}, "
+            f"Update data fields: {list(update_data.keys()) if isinstance(update_data, dict) else 'not a dict'}, "
+            f"Sheet names: {sheet_names}"
         )
         logger.info(f"Update request - Include update log: {include_update_log}")
 
@@ -2224,21 +2290,46 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
             f.write(excel_data)
         logger.info(f"Saved Excel file to: {excel_path}")
 
-        # Update Excel file (same process for both modes)
+        # Save source Excel file if provided (for add_sheets operation)
+        source_excel_path = None
+        if source_excel_file and source_excel_data:
+            source_filename = f"source_{uuid.uuid4().hex[:8]}.xlsx"
+            source_excel_path = os.path.join(temp_dir, source_filename)
+            with open(source_excel_path, "wb") as f:
+                f.write(source_excel_data)
+            logger.info(f"Saved source Excel file to: {source_excel_path}")
+
+        # Process based on operation type
         updater = ExcelUpdater(excel_path)
         try:
-            updated_path = updater.update_excel(update_data, config, include_update_log)
+            if operation == "update":
+                # Original update logic
+                updated_path = updater.update_excel(update_data, config, include_update_log)
+            elif operation == "delete_sheets":
+                # Delete sheets operation
+                updated_path = updater.delete_sheets(sheet_names, include_update_log)
+            elif operation == "add_sheets":
+                # Add sheets operation
+                updated_path = updater.add_sheets(
+                    source_excel_path, 
+                    sheet_names, 
+                    include_update_log,
+                    sheet_positions if 'sheet_positions' in locals() else None
+                )
+            else:
+                # This should never happen due to earlier validation
+                raise ValidationError(f"Unknown operation: {operation}")
 
             # Return updated file
             return send_file(
                 updated_path,
                 as_attachment=True,
-                download_name=f"updated_{excel_file.filename}",
+                download_name=f"{operation}_{excel_file.filename}",
                 mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
         except Exception as e:
-            logger.error(f"Excel update failed: {e}")
+            logger.error(f"Excel {operation} failed: {e}")
             return create_error_response(e, 400)
         finally:
             updater.close()

@@ -153,12 +153,20 @@ class PayloadParser:
         if self.is_json_request:
             # JSON mode: Extract base64-encoded file
             json_data = self.get_json_data()
+            
+            # Try exact field name first
             file_b64 = json_data.get(field_name)
+            
+            # If not found, try with _base64 suffix (common pattern for base64 files)
+            if not file_b64 and not field_name.endswith("_base64"):
+                file_b64 = json_data.get(f"{field_name}_base64")
+                if file_b64:
+                    logger.info(f"Found {field_name} as {field_name}_base64 in JSON payload")
 
             if not file_b64:
                 if required:
                     raise ValidationError(
-                        f"{field_name} (base64) is required in JSON mode"
+                        f"{field_name} or {field_name}_base64 is required in JSON mode"
                     )
                 return None
 

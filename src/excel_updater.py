@@ -1890,6 +1890,208 @@ class ExcelUpdater:
         if hasattr(self, "workbook"):
             self.workbook.close()
 
+    def delete_sheets(self, sheet_names: List[str], include_update_log: bool = False) -> str:
+        """
+        Delete specified sheets from the workbook.
+
+        Args:
+            sheet_names: List of sheet names to delete
+            include_update_log: Whether to include diagnostic update_log sheet
+
+        Returns:
+            Path to updated Excel file
+        """
+        try:
+            self._log_info(f"Starting sheet deletion process for sheets: {sheet_names}")
+
+            # Validate that at least one sheet will remain
+            current_sheets = list(self.workbook.sheetnames)
+            sheets_to_delete = [name for name in sheet_names if name in current_sheets]
+            sheets_not_found = [name for name in sheet_names if name not in current_sheets]
+            
+            if sheets_not_found:
+                self._log_warning(f"Sheets not found in workbook: {sheets_not_found}")
+            
+            if not sheets_to_delete:
+                self._log_error("No valid sheets to delete")
+                raise ValidationError("None of the specified sheets exist in the workbook")
+            
+            remaining_sheets = len(current_sheets) - len(sheets_to_delete)
+            if remaining_sheets < 1:
+                self._log_error("Cannot delete all sheets - at least one sheet must remain")
+                raise ValidationError("Cannot delete all sheets from workbook. At least one sheet must remain.")
+            
+            # Delete the sheets
+            for sheet_name in sheets_to_delete:
+                self._log_info(f"Deleting sheet: {sheet_name}")
+                del self.workbook[sheet_name]
+                self.update_log.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "operation": "delete_sheet",
+                    "cell": sheet_name,
+                    "status": "success",
+                    "details": f"Deleted sheet: {sheet_name}"
+                })
+            
+            self._log_info(f"Successfully deleted {len(sheets_to_delete)} sheets")
+            
+            # Add diagnostic log sheet if requested
+            if include_update_log:
+                self._add_update_log_sheet()
+            
+            # Save updated workbook
+            output_path = self._save_updated_workbook()
+            self._log_info(f"Sheet deletion completed successfully: {output_path}")
+            
+            return output_path
+            
+        except Exception as e:
+            self._log_error(f"Sheet deletion failed: {e}")
+            raise ExcelProcessingError(f"Failed to delete sheets: {e}")
+
+    def add_sheets(self, source_file_path: str, sheet_names: List[str], include_update_log: bool = False, sheet_positions: Optional[Dict[str, Optional[int]]] = None) -> str:
+        """
+        Add sheets from source workbook to this workbook.
+
+        Args:
+            source_file_path: Path to source Excel file
+            sheet_names: List of sheet names to copy from source
+            include_update_log: Whether to include diagnostic update_log sheet
+            sheet_positions: Optional dict mapping sheet names to their desired positions
+
+        Returns:
+            Path to updated Excel file
+        """
+        try:
+            self._log_info(f"Starting sheet addition process from {source_file_path}")
+            self._log_info(f"Sheets to add: {sheet_names}")
+            if sheet_positions:
+                self._log_info(f"Sheet positions: {sheet_positions}")
+            
+            # Load source workbook
+            source_workbook = load_workbook(source_file_path, data_only=False)
+            
+            try:
+                # Validate source sheets exist
+                source_sheets = source_workbook.sheetnames
+                sheets_to_copy = [name for name in sheet_names if name in source_sheets]
+                sheets_not_found = [name for name in sheet_names if name not in source_sheets]
+                
+                if sheets_not_found:
+                    self._log_warning(f"Sheets not found in source workbook: {sheets_not_found}")
+                
+                if not sheets_to_copy:
+                    self._log_error("No valid sheets to copy")
+                    raise ValidationError("None of the specified sheets exist in the source workbook")
+                
+                # Check for duplicate sheet names
+                current_sheets = self.workbook.sheetnames
+                duplicate_sheets = [name for name in sheets_to_copy if name in current_sheets]
+                
+                # Initialize rename_map for all cases
+                rename_map = {}
+                
+                if duplicate_sheets:
+                    # Rename duplicates by appending a number
+                    for sheet_name in duplicate_sheets:
+                        counter = 1
+                        new_name = f"{sheet_name}_{counter}"
+                        while new_name in current_sheets or new_name in rename_map.values():
+                            counter += 1
+                            new_name = f"{sheet_name}_{counter}"
+                        rename_map[sheet_name] = new_name
+                        self._log_warning(f"Sheet '{sheet_name}' already exists, will be renamed to '{new_name}'")
+                
+                # Copy sheets
+                for sheet_name in sheets_to_copy:
+                    self._log_info(f"Copying sheet: {sheet_name}")
+                    source_sheet = source_workbook[sheet_name]
+                    
+                    # Create new sheet in target workbook
+                    target_sheet_name = rename_map.get(sheet_name, sheet_name)
+                    
+                    # Get position for this specific sheet
+                    position = None
+                    if sheet_positions:
+                        position = sheet_positions.get(sheet_name)
+                    
+                    if position is not None:
+                        target_sheet = self.workbook.create_sheet(target_sheet_name, position)
+                        self._log_info(f"Created sheet '{target_sheet_name}' at position {position}")
+                    else:
+                        target_sheet = self.workbook.create_sheet(target_sheet_name)
+                        self._log_info(f"Created sheet '{target_sheet_name}' at end")
+                    
+                    # Copy sheet properties
+                    target_sheet.sheet_properties = copy.copy(source_sheet.sheet_properties)
+                    
+                    # Copy all cells with their properties
+                    for row in source_sheet.iter_rows():
+                        for cell in row:
+                            target_cell = target_sheet[cell.coordinate]
+                            
+                            # Copy cell value
+                            if cell.value is not None:
+                                target_cell.value = cell.value
+                            
+                            # Copy cell style
+                            if cell.has_style:
+                                target_cell.font = copy.copy(cell.font)
+                                target_cell.border = copy.copy(cell.border)
+                                target_cell.fill = copy.copy(cell.fill)
+                                target_cell.number_format = cell.number_format
+                                target_cell.protection = copy.copy(cell.protection)
+                                target_cell.alignment = copy.copy(cell.alignment)
+                    
+                    # Copy merged cells
+                    for merged_range in source_sheet.merged_cells.ranges:
+                        target_sheet.merge_cells(str(merged_range))
+                    
+                    # Copy column dimensions
+                    for col_letter, col_dim in source_sheet.column_dimensions.items():
+                        target_sheet.column_dimensions[col_letter].width = col_dim.width
+                        target_sheet.column_dimensions[col_letter].hidden = col_dim.hidden
+                    
+                    # Copy row dimensions
+                    for row_num, row_dim in source_sheet.row_dimensions.items():
+                        target_sheet.row_dimensions[row_num].height = row_dim.height
+                        target_sheet.row_dimensions[row_num].hidden = row_dim.hidden
+                    
+                    # Note: Images and charts would require additional handling
+                    # For now, we'll log a warning if they exist
+                    if hasattr(source_sheet, '_images') and source_sheet._images:
+                        self._log_warning(f"Sheet '{sheet_name}' contains images which were not copied")
+                    if hasattr(source_sheet, '_charts') and source_sheet._charts:
+                        self._log_warning(f"Sheet '{sheet_name}' contains charts which were not copied")
+                    
+                    self.update_log.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "operation": "add_sheet",
+                        "cell": f"{sheet_name} → {target_sheet_name}",
+                        "status": "success",
+                        "details": f"Added sheet '{target_sheet_name}' from source sheet '{sheet_name}'"
+                    })
+                
+                self._log_info(f"Successfully added {len(sheets_to_copy)} sheets")
+                
+            finally:
+                # Always close source workbook
+                source_workbook.close()
+            
+            # Add diagnostic log sheet if requested
+            if include_update_log:
+                self._add_update_log_sheet()
+            
+            # Save updated workbook
+            output_path = self._save_updated_workbook()
+            self._log_info(f"Sheet addition completed successfully: {output_path}")
+            
+            return output_path
+            
+        except Exception as e:
+            self._log_error(f"Sheet addition failed: {e}")
+            raise ExcelProcessingError(f"Failed to add sheets: {e}")
+
     def _insert_image_v2(
         self, sheet: Worksheet, cell_address: str, image_data: Any
     ) -> bool:
