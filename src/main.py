@@ -2160,21 +2160,30 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
                 
                 # For add_sheets, check for new sheet_operations format first
                 sheet_positions = None
+                sheet_replace_flags = None
                 if operation == "add_sheets":
                     sheet_operations = parser.get_json_param(
                         "sheet_operations", default=None, required=False
                     )
                     
                     if sheet_operations:
-                        # New format with positions
+                        # New format with positions and replace flags
                         sheet_names = [op["name"] for op in sheet_operations]
                         sheet_positions = {op["name"]: op.get("position") for op in sheet_operations}
+                        sheet_replace_flags = {op["name"]: op.get("replace") for op in sheet_operations}
                         logger.info(f"Using sheet_operations format with positions: {sheet_positions}")
+                        logger.info(f"Replace flags: {sheet_replace_flags}")
                     else:
                         # Legacy format - just sheet names
                         sheet_names = parser.get_json_param(
                             "sheet_names", default=[], required=True
                         )
+                        sheet_positions = {}
+                        # Check for global replace flag
+                        replace_existing = parser.get_json_param("replace_existing", default=None, required=False)
+                        if replace_existing is not None:
+                            sheet_replace_flags = {name: replace_existing for name in sheet_names}
+                            logger.info(f"Using global replace_existing flag: {replace_existing}")
                 else:
                     # For delete_sheets, only support simple sheet_names
                     sheet_names = parser.get_json_param(
@@ -2314,7 +2323,8 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
                     source_excel_path, 
                     sheet_names, 
                     include_update_log,
-                    sheet_positions if 'sheet_positions' in locals() else None
+                    sheet_positions if 'sheet_positions' in locals() else None,
+                    sheet_replace_flags if 'sheet_replace_flags' in locals() else None
                 )
             else:
                 # This should never happen due to earlier validation

@@ -1949,7 +1949,7 @@ class ExcelUpdater:
             self._log_error(f"Sheet deletion failed: {e}")
             raise ExcelProcessingError(f"Failed to delete sheets: {e}")
 
-    def add_sheets(self, source_file_path: str, sheet_names: List[str], include_update_log: bool = False, sheet_positions: Optional[Dict[str, Optional[int]]] = None) -> str:
+    def add_sheets(self, source_file_path: str, sheet_names: List[str], include_update_log: bool = False, sheet_positions: Optional[Dict[str, Optional[int]]] = None, sheet_replace_flags: Optional[Dict[str, Optional[bool]]] = None) -> str:
         """
         Add sheets from source workbook to this workbook.
 
@@ -1958,6 +1958,7 @@ class ExcelUpdater:
             sheet_names: List of sheet names to copy from source
             include_update_log: Whether to include diagnostic update_log sheet
             sheet_positions: Optional dict mapping sheet names to their desired positions
+            sheet_replace_flags: Optional dict mapping sheet names to replace behavior (True/False/None)
 
         Returns:
             Path to updated Excel file
@@ -1967,6 +1968,8 @@ class ExcelUpdater:
             self._log_info(f"Sheets to add: {sheet_names}")
             if sheet_positions:
                 self._log_info(f"Sheet positions: {sheet_positions}")
+            if sheet_replace_flags:
+                self._log_info(f"Sheet replace flags: {sheet_replace_flags}")
             
             # Load source workbook
             source_workbook = load_workbook(source_file_path, data_only=False)
@@ -1988,19 +1991,59 @@ class ExcelUpdater:
                 current_sheets = self.workbook.sheetnames
                 duplicate_sheets = [name for name in sheets_to_copy if name in current_sheets]
                 
-                # Initialize rename_map for all cases
+                # Initialize collections for different handling strategies
                 rename_map = {}
+                sheets_to_skip = []
+                sheets_to_replace = []
+                sheets_to_rename = []
                 
-                if duplicate_sheets:
-                    # Rename duplicates by appending a number
-                    for sheet_name in duplicate_sheets:
-                        counter = 1
+                # Process duplicates based on replace flags
+                for sheet_name in duplicate_sheets:
+                    replace_flag = sheet_replace_flags.get(sheet_name) if sheet_replace_flags else None
+                    
+                    if replace_flag is True:
+                        sheets_to_replace.append(sheet_name)
+                    elif replace_flag is False:
+                        sheets_to_skip.append(sheet_name)
+                    else:
+                        # Default behavior - rename
+                        sheets_to_rename.append(sheet_name)
+                
+                # Handle replacements first
+                for sheet_name in sheets_to_replace:
+                    # Store original position if no new position specified
+                    original_position = list(self.workbook.sheetnames).index(sheet_name)
+                    del self.workbook[sheet_name]
+                    self._log_info(f"Deleted existing sheet '{sheet_name}' for replacement")
+                    
+                    # Update position if not specified
+                    if sheet_positions is None:
+                        sheet_positions = {}
+                    if sheet_positions.get(sheet_name) is None:
+                        sheet_positions[sheet_name] = original_position
+                        self._log_info(f"Will insert replacement sheet '{sheet_name}' at original position {original_position}")
+                
+                # Skip sheets marked as no-replace
+                for sheet_name in sheets_to_skip:
+                    sheets_to_copy.remove(sheet_name)
+                    self._log_warning(f"Skipping sheet '{sheet_name}' - already exists and replace=false")
+                    self.update_log.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "operation": "add_sheet_skipped",
+                        "cell": sheet_name,
+                        "status": "skipped",
+                        "details": f"Sheet '{sheet_name}' already exists and replace=false"
+                    })
+                
+                # Handle renames
+                for sheet_name in sheets_to_rename:
+                    counter = 1
+                    new_name = f"{sheet_name}_{counter}"
+                    while new_name in current_sheets or new_name in rename_map.values():
+                        counter += 1
                         new_name = f"{sheet_name}_{counter}"
-                        while new_name in current_sheets or new_name in rename_map.values():
-                            counter += 1
-                            new_name = f"{sheet_name}_{counter}"
-                        rename_map[sheet_name] = new_name
-                        self._log_warning(f"Sheet '{sheet_name}' already exists, will be renamed to '{new_name}'")
+                    rename_map[sheet_name] = new_name
+                    self._log_warning(f"Sheet '{sheet_name}' already exists, will be renamed to '{new_name}'")
                 
                 # Copy sheets
                 for sheet_name in sheets_to_copy:
@@ -2064,12 +2107,15 @@ class ExcelUpdater:
                     if hasattr(source_sheet, '_charts') and source_sheet._charts:
                         self._log_warning(f"Sheet '{sheet_name}' contains charts which were not copied")
                     
+                    # Determine if this was a replacement
+                    was_replaced = sheet_name in sheets_to_replace
+                    
                     self.update_log.append({
                         "timestamp": datetime.now().isoformat(),
-                        "operation": "add_sheet",
+                        "operation": "add_sheet_replaced" if was_replaced else "add_sheet",
                         "cell": f"{sheet_name} → {target_sheet_name}",
                         "status": "success",
-                        "details": f"Added sheet '{target_sheet_name}' from source sheet '{sheet_name}'"
+                        "details": f"{'Replaced' if was_replaced else 'Added'} sheet '{target_sheet_name}' from source sheet '{sheet_name}'"
                     })
                 
                 self._log_info(f"Successfully added {len(sheets_to_copy)} sheets")
