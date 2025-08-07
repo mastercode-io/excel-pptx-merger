@@ -201,6 +201,8 @@ class SharePointFileHandler:
         except Exception as e:
             error_msg = f"Failed to download file from SharePoint: {e}"
             logger.error(f"❌ {error_msg}")
+            logger.error(f"   URL: {sharepoint_url}")
+            logger.error(f"   Item ID: {sharepoint_item_id}")
             raise ValidationError(error_msg)
 
     def get_credentials_summary(self) -> Dict[str, Any]:

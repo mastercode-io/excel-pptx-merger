@@ -16,9 +16,14 @@ class SharePointUrlParser:
         r"https://([^/]+)\.sharepoint\.com/sites/([^/]+)/([^/]+)/(.+)$"
     )
 
-    # Doc.aspx pattern for direct document access
+    # Doc.aspx pattern for direct document access (with /:x:/r/ prefix)
     DOC_ASPX_PATTERN = re.compile(
         r"https://([^/]+)\.sharepoint\.com/:([xpwb]):/r/_layouts/15/Doc\.aspx\?sourcedoc=([^&]+)"
+    )
+
+    # Root-level Doc.aspx pattern (without /:x:/r/ prefix)
+    ROOT_DOC_ASPX_PATTERN = re.compile(
+        r"https://([^/]+)\.sharepoint\.com/_layouts/15/Doc\.aspx\?sourcedoc=([^&]+)"
     )
 
     # Document library mappings
@@ -61,10 +66,15 @@ class SharePointUrlParser:
 
             tenant = tenant_match.group(1)
 
-            # Check if it's a Doc.aspx URL
+            # Check if it's a Doc.aspx URL (with /:x:/r/ prefix)
             doc_aspx_match = self.DOC_ASPX_PATTERN.match(url)
             if doc_aspx_match:
                 return self._parse_doc_aspx_url(url, tenant, doc_aspx_match)
+
+            # Check if it's a root-level Doc.aspx URL (without prefix)
+            root_doc_match = self.ROOT_DOC_ASPX_PATTERN.match(url)
+            if root_doc_match:
+                return self._parse_root_doc_aspx_url(url, tenant, root_doc_match)
 
             # Otherwise, try standard path pattern
             path_parts = [part for part in parsed.path.split("/") if part]
@@ -143,6 +153,56 @@ class SharePointUrlParser:
         }
 
         logger.debug(f"Parsed Doc.aspx URL: {result}")
+        return result
+
+    def _parse_root_doc_aspx_url(
+        self, url: str, tenant: str, match: re.Match
+    ) -> Dict[str, str]:
+        """Parse root-level Doc.aspx URL format (without /:x:/r/ prefix).
+
+        Args:
+            url: Full URL
+            tenant: Extracted tenant name
+            match: Regex match object from ROOT_DOC_ASPX_PATTERN
+
+        Returns:
+            Dictionary with parsed components
+        """
+        sourcedoc = match.group(2)
+
+        # Extract query parameters
+        parsed = urlparse(url)
+        params = dict(
+            param.split("=") for param in parsed.query.split("&") if "=" in param
+        )
+        filename = unquote(params.get("file", ""))
+
+        # Determine file type from filename extension
+        file_type = "unknown"
+        if filename:
+            filename_lower = filename.lower()
+            if filename_lower.endswith((".xlsx", ".xlsm", ".xls")):
+                file_type = "excel"
+            elif filename_lower.endswith((".pptx", ".pptm", ".ppt")):
+                file_type = "powerpoint"
+            elif filename_lower.endswith((".docx", ".docm", ".doc")):
+                file_type = "word"
+
+        # Clean up sourcedoc (remove URL encoding and braces)
+        sourcedoc_clean = unquote(sourcedoc).strip("{}")
+
+        result = {
+            "tenant": tenant,
+            "hostname": f"{tenant}.sharepoint.com",
+            "full_url": url,
+            "url_type": "root_doc_aspx",
+            "file_type": file_type,
+            "sourcedoc": sourcedoc_clean,
+            "filename": filename,
+            "requires_shares_api": True,  # This format always requires Shares API
+        }
+
+        logger.debug(f"Parsed root-level Doc.aspx URL: {result}")
         return result
 
     def _normalize_library_name(self, library_name: str) -> str:

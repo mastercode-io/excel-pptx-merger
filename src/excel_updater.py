@@ -556,6 +556,11 @@ class ExcelUpdater:
             elif field_type == "image":
                 return self._insert_image_v2(sheet, cell_address, value)
 
+            elif field_type == "formula":
+                # Set formula directly - Excel will evaluate it
+                cell.value = str(value) if value is not None else ""
+                self._log_success(f"Updated {cell_address} with formula: '{value}'")
+
             else:
                 # Default to text
                 cell.value = str(value) if value is not None else ""
