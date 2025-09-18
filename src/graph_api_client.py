@@ -206,6 +206,57 @@ class GraphAPIClient:
         # Add u! prefix
         return f"u!{share_token}"
 
+    def _get_driveitem_from_share_token(self, share_token: str) -> Dict[str, str]:
+        """Get drive item information from a share token.
+        
+        Args:
+            share_token: The share token extracted from sharing link
+            
+        Returns:
+            Dictionary containing item_id, drive_id, and optionally site_id
+        """
+        try:
+            # Encode the share token for the API (add u! prefix)
+            encoded_token = f"u!{share_token}"
+            
+            # Use the shares endpoint to get the driveItem
+            shares_url = f"{self.base_url}/shares/{encoded_token}/driveItem"
+            
+            headers = {"Authorization": f"Bearer {self.authenticate()}"}
+            
+            response = requests.get(shares_url, headers=headers, timeout=self.timeout)
+            response.raise_for_status()
+            
+            drive_item = response.json()
+            item_id = drive_item["id"]
+            
+            # Extract parent reference information
+            parent_ref = drive_item.get("parentReference", {})
+            drive_id = parent_ref.get("driveId")
+            site_id = parent_ref.get("siteId")
+            
+            # Store context for subsequent API calls
+            self.current_drive_id = drive_id
+            self.current_site_id = site_id
+            
+            result = {
+                "item_id": item_id,
+                "drive_id": drive_id,
+                "site_id": site_id
+            }
+            
+            logger.info(f"Resolved share token via Shares API:")
+            logger.info(f"  Item ID: {item_id}")
+            logger.info(f"  Drive ID: {drive_id}")
+            logger.info(f"  Site ID: {site_id}")
+            
+            return result
+            
+        except requests.exceptions.RequestException as e:
+            raise GraphAPIError(f"Failed to resolve share token via Shares API: {e}")
+        except KeyError as e:
+            raise GraphAPIError(f"Invalid response from Shares API: {e}")
+
     def get_driveitem_from_sharing_url(self, sharepoint_url: str) -> Dict[str, str]:
         """Get drive item information from SharePoint URL using Shares API.
 
@@ -273,10 +324,19 @@ class GraphAPIClient:
 
             logger.info(f"📝 Parsed URL components: {parsed}")
 
-            # Check if this URL requires the Shares API (Doc.aspx format)
+            # Check if this URL requires the Shares API (Doc.aspx format or sharing link)
             if parsed.get("requires_shares_api", False):
-                logger.info(f"🌐 Using Shares API for Doc.aspx URL: {sharepoint_url}")
-                drive_item_info = self.get_driveitem_from_sharing_url(sharepoint_url)
+                logger.info(f"🌐 Using Shares API for URL type: {parsed.get('url_type')}")
+                
+                # For sharing links, we already have the share token
+                if parsed.get("url_type") == "sharing_link":
+                    share_token = parsed.get("share_token")
+                    logger.info(f"🔑 Using share token from URL: {share_token}")
+                    drive_item_info = self._get_driveitem_from_share_token(share_token)
+                else:
+                    # For Doc.aspx URLs, encode the full URL
+                    drive_item_info = self.get_driveitem_from_sharing_url(sharepoint_url)
+                
                 item_id = drive_item_info["item_id"]
                 logger.info(f"✅ Shares API resolved to item ID: {item_id}")
                 return item_id

@@ -308,6 +308,21 @@ class ExcelProcessor:
             for sheet_name, config in sheet_config.items():
                 logger.debug(f"Processing sheet: {sheet_name}")
                 
+                # DEBUG TMH USE AUDIT sheet processing
+                if sheet_name == "TMH USE AUDIT":
+                    logger.info("🏢" * 50)
+                    logger.info("🏢 TMH USE AUDIT SHEET PROCESSING")
+                    logger.info(f"🏢 Sheet config: {config}")
+                    
+                    # Check if this config contains pricing_info subtable
+                    subtables = config.get("subtables", [])
+                    logger.info(f"🏢 Number of subtables: {len(subtables)}")
+                    for i, subtable in enumerate(subtables):
+                        logger.info(f"🏢 Subtable {i+1}: name='{subtable.get('name', 'unnamed')}', type='{subtable.get('type', 'unknown')}'")
+                        if subtable.get("name") == "pricing_info":
+                            logger.info(f"🏢 Found pricing_info subtable config: {subtable}")
+                    logger.info("🏢" * 50)
+                
                 # DEBUG gs_classes_terms sheet processing
                 if sheet_name == "Order Form":
                     logger.info("⚡" * 50)
@@ -366,15 +381,26 @@ class ExcelProcessor:
 
         for subtable_config in config["subtables"]:
             subtable_name = subtable_config.get("name", "unnamed_subtable")
-            logger.debug(f"Processing subtable: {subtable_name}")
-
+            subtable_type = subtable_config.get("type", "unknown")
+            
+            # START PROCESSING LOG
+            logger.info(f"🔸 SUBTABLE START: {subtable_name} (type: {subtable_type})")
+            
             try:
                 subtable_data = self._extract_subtable(
                     worksheet, subtable_config, images
                 )
                 sheet_data[subtable_name] = subtable_data
+                
+                # SUCCESS LOG
+                data_count = len(subtable_data) if isinstance(subtable_data, dict) else 'N/A'
+                logger.info(f"✅ SUBTABLE END: {subtable_name} - SUCCESS (extracted {data_count} items)")
+                
             except Exception as e:
-                logger.error(f"Failed to process subtable '{subtable_name}': {e}")
+                # ERROR LOG
+                logger.error(f"❌ SUBTABLE END: {subtable_name} - FAILED: {e}")
+                logger.exception(f"Full exception details for {subtable_name}")
+                # Continue processing other subtables
                 sheet_data[subtable_name] = {}
 
         return sheet_data
@@ -393,6 +419,17 @@ class ExcelProcessor:
         
         # DEBUG ALL SUBTABLES
         logger.info(f"🔍 SUBTABLE: {subtable_name} (type: {subtable_type})")
+        
+        # Enhanced debugging for pricing_info
+        if subtable_name == "pricing_info":
+            logger.info("💰" * 50)
+            logger.info("💰 PRICING_INFO SUBTABLE PROCESSING")
+            logger.info(f"💰 Full subtable config: {config}")
+            logger.info(f"💰 subtable_type: {subtable_type}")
+            logger.info(f"💰 header_search: {header_search}")
+            logger.info(f"💰 data_extraction: {data_extraction}")
+            logger.info("💰" * 50)
+        
         if subtable_name == "gs_classes_terms":
             logger.info("🔥" * 50)
             logger.info("🔥 GS_CLASSES_TERMS SUBTABLE PROCESSING")
@@ -444,6 +481,9 @@ class ExcelProcessor:
         search_text = search_config.get("text", "")
         search_column = search_config.get("column", "A")
         search_range = search_config.get("search_range", "A1:A10")
+        
+        # DEBUG: Log what we're searching for
+        logger.info(f"🔎 HEADER SEARCH: Looking for '{search_text}' using method '{method}' in range '{search_range}'")
 
         if not validate_cell_range(search_range):
             raise ValidationError(f"Invalid cell range: {search_range}")
@@ -466,11 +506,18 @@ class ExcelProcessor:
         self, worksheet: Worksheet, search_text: str, search_range: str
     ) -> Optional[Tuple[int, int]]:
         """Find cell containing specific text."""
+        cells_checked = 0
         for row in worksheet[search_range]:
             for cell in row:
-                if cell.value and isinstance(cell.value, str):
-                    if search_text.lower() in cell.value.lower():
-                        return (cell.row, cell.column)
+                cells_checked += 1
+                if cell.value:
+                    # DEBUG: Log what we're comparing
+                    logger.debug(f"   Cell {cell.coordinate}: '{cell.value}' (comparing with '{search_text}')")
+                    if isinstance(cell.value, str):
+                        if search_text.lower() in cell.value.lower():
+                            logger.info(f"✅ FOUND MATCH at {cell.coordinate}: '{cell.value}' contains '{search_text}'")
+                            return (cell.row, cell.column)
+        logger.warning(f"❌ NO MATCH FOUND for '{search_text}' after checking {cells_checked} cells in range {search_range}")
         return None
 
     def _find_by_exact_match(
@@ -848,9 +895,18 @@ class ExcelProcessor:
         max_columns = config.get("max_columns", 20)
         max_rows = config.get("max_rows", 1000)
         column_mappings = config.get("column_mappings", {})
+        column_address_mappings = config.get("column_address_mappings", {})
         row_key_mappings = config.get("row_key_mappings", {})
 
         try:
+            # DEBUG: Log calculated positions
+            logger.info(f"📊 MATRIX TABLE DEBUG:")
+            logger.info(f"   Found header at: row {header_row}, col {header_col}")
+            logger.info(f"   Headers row (calculated): {headers_row}")
+            logger.info(f"   Data start row (calculated): {data_start_row}")
+            logger.info(f"   Data start column (calculated): {data_start_col}")
+            logger.info(f"   Max columns to scan: {max_columns}")
+            
             # Extract column headers
             headers = []
             original_headers = []
@@ -859,6 +915,9 @@ class ExcelProcessor:
             for col_offset in range(max_columns):
                 col = data_start_col + col_offset
                 header_cell = worksheet.cell(row=headers_row, column=col)
+                
+                # DEBUG: Log what we're checking in each header cell
+                logger.debug(f"   Checking header cell {header_cell.coordinate}: '{header_cell.value}'")
 
                 if header_cell.value and not is_empty_cell_value(header_cell.value):
                     header = str(header_cell.value).strip()
@@ -866,8 +925,22 @@ class ExcelProcessor:
                     # DEBUG ALL TABLES - Log every header found
                     logger.info(f"🔍 HEADER FOUND: '{header}'")
 
-                    # Apply column mapping if available
-                    if header in column_mappings:
+                    # Calculate column letter for address-based mapping
+                    col_letter = get_column_letter(col)
+                    
+                    # Check column address mapping first (higher priority)
+                    if col_letter in column_address_mappings:
+                        mapping = column_address_mappings[col_letter]
+                        if isinstance(mapping, str):
+                            mapped_header = mapping
+                            field_type = "text"
+                        else:
+                            mapped_header = mapping.get("name", normalize_column_name(header))
+                            field_type = mapping.get("type", "text")
+                        # DEBUG ALL TABLES - Log address-based mapping
+                        logger.info(f"🔍 COLUMN ADDRESS MAPPING: Column '{col_letter}' -> '{mapped_header}'")
+                    # Fall back to text-based column mapping
+                    elif header in column_mappings:
                         mapping = column_mappings[header]
                         if isinstance(mapping, str):
                             mapped_header = mapping
@@ -878,7 +951,7 @@ class ExcelProcessor:
                             )
                             field_type = mapping.get("type", "text")
                         # DEBUG ALL TABLES - Log every mapping applied
-                        logger.info(f"🔍 MAPPING APPLIED: '{header}' -> '{mapped_header}'")
+                        logger.info(f"🔍 TEXT MAPPING APPLIED: '{header}' -> '{mapped_header}'")
                     else:
                         mapped_header = normalize_column_name(header)
                         field_type = "text"

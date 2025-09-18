@@ -25,6 +25,11 @@ class SharePointUrlParser:
     ROOT_DOC_ASPX_PATTERN = re.compile(
         r"https://([^/]+)\.sharepoint\.com/_layouts/15/Doc\.aspx\?sourcedoc=([^&]+)"
     )
+    
+    # Sharing link pattern (/:x:/g/ format for short sharing links)
+    SHARING_LINK_PATTERN = re.compile(
+        r"https://([^/]+)\.sharepoint\.com/:([xpwb]):/g/([^/?]+)"
+    )
 
     # Document library mappings
     LIBRARY_MAPPINGS = {
@@ -75,6 +80,11 @@ class SharePointUrlParser:
             root_doc_match = self.ROOT_DOC_ASPX_PATTERN.match(url)
             if root_doc_match:
                 return self._parse_root_doc_aspx_url(url, tenant, root_doc_match)
+            
+            # Check if it's a sharing link (/:x:/g/ format)
+            sharing_link_match = self.SHARING_LINK_PATTERN.match(url)
+            if sharing_link_match:
+                return self._parse_sharing_link_url(url, tenant, sharing_link_match)
 
             # Otherwise, try standard path pattern
             path_parts = [part for part in parsed.path.split("/") if part]
@@ -203,6 +213,39 @@ class SharePointUrlParser:
         }
 
         logger.debug(f"Parsed root-level Doc.aspx URL: {result}")
+        return result
+    
+    def _parse_sharing_link_url(
+        self, url: str, tenant: str, match: re.Match
+    ) -> Dict[str, str]:
+        """Parse sharing link URL format (/:x:/g/).
+        
+        Args:
+            url: Full URL
+            tenant: Extracted tenant name
+            match: Regex match object from SHARING_LINK_PATTERN
+            
+        Returns:
+            Dictionary with parsed components
+        """
+        file_type_code = match.group(2)
+        share_token = match.group(3)
+        
+        # Map file type codes to types
+        file_type_map = {"x": "excel", "p": "powerpoint", "w": "word", "b": "onenote"}
+        file_type = file_type_map.get(file_type_code, "unknown")
+        
+        result = {
+            "tenant": tenant,
+            "hostname": f"{tenant}.sharepoint.com",
+            "full_url": url,
+            "url_type": "sharing_link",
+            "file_type": file_type,
+            "share_token": share_token,
+            "requires_shares_api": True,
+        }
+        
+        logger.debug(f"Parsed sharing link URL: {result}")
         return result
 
     def _normalize_library_name(self, library_name: str) -> str:

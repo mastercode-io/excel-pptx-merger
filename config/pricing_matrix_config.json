@@ -1,0 +1,54 @@
+{
+  "version": "1.0",
+  "sheet_configs": {
+    "Pricing": {
+      "subtables": [
+        {
+          "name": "pricing_matrix",
+          "type": "matrix_table",
+          "header_search": {
+            "method": "fixed_row",
+            "row": 2,
+            "column": "A"
+          },
+          "data_extraction": {
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "row_keys_column": "A",
+            "data_start_column": "B",
+            "max_columns": 9,
+            "max_rows": 7,
+            "column_address_mappings": {
+              "B": "priority_base",
+              "C": "priority_vat",
+              "D": "priority_total",
+              "E": "recommended_base",
+              "F": "recommended_vat",
+              "G": "recommended_total",
+              "H": "best_value_base",
+              "I": "best_value_vat",
+              "J": "best_value_total"
+            },
+            "row_key_mappings": {
+              "IPO Application Fees": "ipo_app_fees",
+              "IPO Classification Fees": "ipo_class_fees",
+              "Administration Fees": "admin_fees",
+              "Classification Fees": "class_fees",
+              "Discount": "discount",
+              "Total": "total",
+              "Payment Options": "payment_options"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "global_settings": {
+    "default_extraction_type": "matrix_table",
+    "normalize_keys": true,
+    "validation": {
+      "strict_mode": false,
+      "allow_empty_values": true
+    }
+  }
+}

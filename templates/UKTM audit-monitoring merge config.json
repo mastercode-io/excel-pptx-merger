@@ -48,6 +48,10 @@
                 "name": "search_type",
                 "type": "text"
               },
+              "G&S Classes": {
+                "name": "gs_classes",
+                "type": "text"
+              },
               "SIC": {
                 "name": "sic_code",
                 "type": "text"
@@ -158,13 +162,39 @@
           }
         },
         {
+          "name": "gs_classes_terms",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "G&S Classes",
+            "column": "A",
+            "search_range": "A20:A30"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_columns": 2,
+            "column_mappings": {
+              "G&S Classes": {
+                "name": "gs_classes",
+                "type": "text"
+              },
+              "G&S Terms": {
+                "name": "gs_terms",
+                "type": "text"
+              }
+            }
+          }
+        },
+        {
           "name": "report_dates",
           "type": "key_value_pairs",
           "header_search": {
             "method": "contains_text",
             "text": "Date of Most Recent Search",
             "column": "A",
-            "search_range": "A20:A50"
+            "search_range": "A20:A70"
           },
           "data_extraction": {
             "orientation": "horizontal",
@@ -194,7 +224,7 @@
             "method": "contains_text",
             "text": "Report Prepared By",
             "column": "A",
-            "search_range": "A25:A50"
+            "search_range": "A25:A75"
           },
           "data_extraction": {
             "orientation": "horizontal",
@@ -220,7 +250,7 @@
             "method": "contains_text",
             "text": "Links",
             "column": "A",
-            "search_range": "A30:A40"
+            "search_range": "A30:A80"
           },
           "data_extraction": {
             "orientation": "vertical",
@@ -235,33 +265,6 @@
               "Booking Link": {
                 "name": "bookung_link",
                 "type": "link"
-              }
-            }
-          }
-        },
-        {
-          "name": "gs_classes_terms",
-          "type": "table",
-          "header_search": {
-            "method": "contains_text",
-            "text": "G & S Classes",
-            "column": "A",
-            "search_range": "A20:A40"
-          },
-          "data_extraction": {
-            "orientation": "vertical",
-            "headers_row_offset": 0,
-            "data_row_offset": 1,
-            "max_columns": 2,
-            "max_rows": 5,
-            "column_mappings": {
-              "G & S Classes": {
-                "name": "gs_classes",
-                "type": "text"
-              },
-              "G & S Terms": {
-                "name": "gs_terms",
-                "type": "text"
               }
             }
           }
@@ -649,6 +652,83 @@
           }
         }
       ]
+    },
+    "TMH USE AUDIT": {
+      "subtables": [
+        {
+          "name": "pricing_info",
+          "type": "matrix_table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "IPO Application Fees",
+            "column": "C",
+            "search_range": "C1:C10"
+          },
+          "data_extraction": {
+            "headers_row_offset": -1,
+            "data_row_offset": 0,
+            "row_keys_col_offset": 0,
+            "data_col_offset": 2,
+            "max_columns": 12,
+            "max_rows": 12,
+            "column_address_mappings": {
+              "E": "priority_base",
+              "F": "priority_vat",
+              "G": "priority_total",
+              "I": "recommended_base",
+              "J": "recommended_vat",
+              "K": "recommended_total",
+              "M": "best_value_base",
+              "N": "best_value_vat",
+              "O": "best_value_total"
+            },
+            "row_key_mappings": {
+              "IPO Application Fees": "ipo_app_fees",
+              "IPO Classification Fees": "ipo_class_fees",
+              "Administration Fees": "admin_fees",
+              "Classification Fees": "class_fees",
+              "Discount": "discount",
+              "Total": "total",
+              "Payment Options": "payment_options"
+            }
+          }
+        },
+        {
+          "name": "result_audit",
+          "type": "matrix_table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Result Summary",
+            "column": "A",
+            "search_range": "A20:A30"
+          },
+          "data_extraction": {
+            "headers_row_offset": 1,
+            "row_keys_col_offset": 0,
+            "data_row_offset": 1,
+            "data_col_offset": 1,
+            "max_columns": 2,
+            "max_rows": 5,
+            "row_key_mappings": {
+              "Google": "google_result",
+              "Company House": "company_house_result",
+              "Domains": "domains_result",
+              "Social Media": "social_media_result",
+              "Trademark Registers": "trademark_registers_result"
+            },
+            "column_mappings": {
+              "Total Results Flagged": {
+                "name": "total_results",
+                "type": "text"
+              },
+              "On This Report": {
+                "name": "this_report_results",
+                "type": "text"
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "global_settings": {
@@ -685,6 +765,14 @@
         "confidence_threshold": 0.3,
         "prefer_position_over_index": true
       }
+    },
+    "range_images": {
+      "enabled": true,
+      "require_sharepoint": true,
+      "default_dpi": 150,
+      "default_format": "png",
+      "max_range_cells": 10000,
+      "temp_cleanup": true
     },
     "powerpoint": {
       "dynamic_slides": {
