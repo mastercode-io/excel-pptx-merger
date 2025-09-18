@@ -28,6 +28,8 @@ from .utils.validation import (
     normalize_column_name,
     validate_cell_range,
     is_empty_cell_value,
+    clean_excel_text_value,
+    get_clean_quotes_setting,
 )
 from .excel_range_exporter import ExcelRangeExporter, create_range_configs_from_dict
 from .config_schema_validator import validate_config_file
@@ -225,6 +227,8 @@ class ExcelProcessor:
         Returns:
             Dictionary of extracted data
         """
+        # Store clean_quotes setting for use in extraction methods
+        self._clean_quotes = get_clean_quotes_setting(full_config or {})
         try:
             # CRITICAL DEBUG: Entry point logging to confirm server is running updated code
             logger.info("=" * 80)
@@ -581,7 +585,7 @@ class ExcelProcessor:
 
                     if key_cell.value and not is_empty_cell_value(key_cell.value):
                         original_key = str(key_cell.value).strip()
-                        value = value_cell.value
+                        value = clean_excel_text_value(value_cell.value, self._clean_quotes)
 
                         # Apply column mapping if available
                         if original_key in column_mappings:
@@ -637,7 +641,7 @@ class ExcelProcessor:
 
                     if key_cell.value and not is_empty_cell_value(key_cell.value):
                         original_key = str(key_cell.value).strip()
-                        value = value_cell.value
+                        value = clean_excel_text_value(value_cell.value, self._clean_quotes)
 
                         # Apply column mapping if available
                         if original_key in column_mappings:
@@ -802,7 +806,7 @@ class ExcelProcessor:
                 ):
                     col = header_col + col_offset
                     cell = worksheet.cell(row=row, column=col)
-                    value = cell.value
+                    value = clean_excel_text_value(cell.value, self._clean_quotes)
 
                     # Check for image at this cell position
                     image_data = None
@@ -1003,7 +1007,7 @@ class ExcelProcessor:
                 ):
                     col = data_start_col + col_offset
                     cell = worksheet.cell(row=row, column=col)
-                    value = cell.value
+                    value = clean_excel_text_value(cell.value, self._clean_quotes)
 
                     # Check for image at this cell position
                     image_data = None
@@ -1314,7 +1318,7 @@ class ExcelProcessor:
 
             worksheet = self.workbook[sheet_name]
             cell = worksheet[cell_reference]
-            return cell.value
+            return clean_excel_text_value(cell.value, getattr(self, '_clean_quotes', True))
 
         except Exception as e:
             raise ExcelProcessingError(f"Failed to get cell value: {e}")

@@ -248,6 +248,46 @@ def validate_merge_fields(template_text: str) -> List[str]:
     return validated_fields
 
 
+def clean_excel_text_value(value: Any, clean_quotes: bool = True) -> Any:
+    """Clean Excel cell values by removing leading single quotes.
+    
+    Excel users often prefix text with a single quote (') to force text formatting
+    and prevent automatic type conversion. This function removes that leading quote
+    while preserving the quote if it's part of the actual content.
+    
+    Args:
+        value: The cell value to clean
+        clean_quotes: Whether to perform quote cleaning (default: True)
+        
+    Returns:
+        Cleaned value with leading quote removed if applicable
+    """
+    if not clean_quotes or value is None:
+        return value
+        
+    # Only process string values
+    if not isinstance(value, str):
+        return value
+        
+    # Only remove leading single quote, preserve quotes elsewhere
+    if value.startswith("'") and len(value) > 1:
+        return value[1:]
+        
+    return value
+
+
+def get_clean_quotes_setting(config: Dict[str, Any]) -> bool:
+    """Get the clean_excel_quotes setting from configuration.
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        Boolean indicating whether to clean Excel quotes (default: True)
+    """
+    return config.get("global_settings", {}).get("clean_excel_quotes", True)
+
+
 def normalize_column_name(column_name: str) -> str:
     """Normalize Excel column names to valid JSON keys."""
     if not column_name or not isinstance(column_name, str):
