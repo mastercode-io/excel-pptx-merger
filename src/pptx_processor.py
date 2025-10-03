@@ -3,7 +3,7 @@
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, BinaryIO
 from PIL import Image as PILImage
 from pptx import Presentation
 from pptx.shapes.base import BaseShape
@@ -19,26 +19,37 @@ logger.setLevel(logging.INFO)  # Force INFO level to ensure debug messages are v
 class PowerPointProcessor:
     """Processes PowerPoint templates and replaces merge fields with data."""
 
-    def __init__(self, template_path: str) -> None:
-        """Initialize PowerPoint processor with template path."""
-        self.template_path = template_path
+    def __init__(self, template_input: Union[str, BinaryIO]) -> None:
+        """Initialize PowerPoint processor with template path or file-like object."""
+        self.template_input = template_input
+        self.template_path = template_input if isinstance(template_input, str) else None
+        self._is_memory_file = not isinstance(template_input, str)
         self.presentation = None
         self._validate_template()
 
     def _validate_template(self) -> None:
         """Validate PowerPoint template exists and is readable."""
-        if not os.path.exists(self.template_path):
-            raise PowerPointProcessingError(
-                f"PowerPoint template not found: {self.template_path}"
-            )
+        if self._is_memory_file:
+            # Memory mode - BytesIO object
+            try:
+                self.presentation = Presentation(self.template_input)
+                logger.info("Successfully loaded PowerPoint template from memory")
+            except Exception as e:
+                raise PowerPointProcessingError(f"Invalid PowerPoint template format: {e}")
+        else:
+            # File mode - file path
+            if not os.path.exists(self.template_path):
+                raise PowerPointProcessingError(
+                    f"PowerPoint template not found: {self.template_path}"
+                )
 
-        try:
-            self.presentation = Presentation(self.template_path)
-            logger.info(
-                f"Successfully loaded PowerPoint template: {self.template_path}"
-            )
-        except Exception as e:
-            raise PowerPointProcessingError(f"Invalid PowerPoint template format: {e}")
+            try:
+                self.presentation = Presentation(self.template_path)
+                logger.info(
+                    f"Successfully loaded PowerPoint template: {self.template_path}"
+                )
+            except Exception as e:
+                raise PowerPointProcessingError(f"Invalid PowerPoint template format: {e}")
 
     def get_merge_fields(self) -> List[str]:
         """Extract all merge fields from the presentation."""

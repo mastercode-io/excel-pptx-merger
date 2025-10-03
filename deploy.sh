@@ -55,7 +55,7 @@ gcloud functions deploy ${FUNCTION_NAME} \
     --allow-unauthenticated \
     --memory=${MEMORY} \
     --timeout=${TIMEOUT} \
-    --set-env-vars="STORAGE_BACKEND=LOCAL,SAVE_FILES=false,FLASK_DEBUG=false,DEVELOPMENT_MODE=false,LOG_LEVEL=INFO" \
+    --set-env-vars="STORAGE_BACKEND=GCS,SAVE_FILES=false,FLASK_DEBUG=false,DEVELOPMENT_MODE=false,LOG_LEVEL=INFO,ENABLE_DEBUG_SAVING=true,DEBUG_TOKEN=debug-access-2024,DEBUG_STORAGE_BUCKET=excel-pptx-merger-storage,GCS_BUCKET_NAME=excel-pptx-merger-storage" \
     --set-secrets="GRAPH_CLIENT_ID=excel-pptx-merger-graph-client-id:latest,GRAPH_CLIENT_SECRET=excel-pptx-merger-graph-client-secret:latest,GRAPH_TENANT_ID=excel-pptx-merger-graph-tenant-id:latest,API_KEY=excel-pptx-merger-api-key:latest"
 
 # Get the function URL for testing

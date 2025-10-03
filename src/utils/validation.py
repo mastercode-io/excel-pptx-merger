@@ -250,29 +250,34 @@ def validate_merge_fields(template_text: str) -> List[str]:
 
 def clean_excel_text_value(value: Any, clean_quotes: bool = True) -> Any:
     """Clean Excel cell values by removing leading single quotes.
-    
+
     Excel users often prefix text with a single quote (') to force text formatting
     and prevent automatic type conversion. This function removes that leading quote
     while preserving the quote if it's part of the actual content.
-    
+
     Args:
         value: The cell value to clean
         clean_quotes: Whether to perform quote cleaning (default: True)
-        
+
     Returns:
         Cleaned value with leading quote removed if applicable
     """
     if not clean_quotes or value is None:
         return value
-        
+
     # Only process string values
     if not isinstance(value, str):
         return value
-        
+
     # Only remove leading single quote, preserve quotes elsewhere
     if value.startswith("'") and len(value) > 1:
-        return value[1:]
-        
+        cleaned_value = value[1:]
+        # Log at DEBUG level to avoid flooding logs in production
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"🧹 Cleaned single quote: '{value}' -> '{cleaned_value}'")
+        return cleaned_value
+
     return value
 
 
@@ -286,6 +291,73 @@ def get_clean_quotes_setting(config: Dict[str, Any]) -> bool:
         Boolean indicating whether to clean Excel quotes (default: True)
     """
     return config.get("global_settings", {}).get("clean_excel_quotes", True)
+
+
+def is_excel_formula(value: Any) -> bool:
+    """Check if a value appears to be an Excel formula instead of a calculated result.
+    
+    Args:
+        value: Cell value to check
+        
+    Returns:
+        True if the value appears to be a formula string
+    """
+    if not isinstance(value, str):
+        return False
+        
+    # Excel formulas start with = sign and have more content
+    if value.startswith("=") and len(value) > 1:
+        return True
+        
+    return False
+
+
+def detect_formula_extraction_issue(data: Dict[str, Any], threshold: float = 0.1) -> bool:
+    """Detect if extracted data contains too many formulas instead of calculated values.
+    
+    Args:
+        data: Extracted data dictionary
+        threshold: Percentage threshold for formula detection (0.1 = 10%)
+        
+    Returns:
+        True if too many formulas are detected, indicating a calculation issue
+    """
+    total_values = 0
+    formula_count = 0
+    
+    def count_values(obj):
+        nonlocal total_values, formula_count
+        
+        if isinstance(obj, dict):
+            for value in obj.values():
+                count_values(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                count_values(item)
+        elif obj is not None:
+            total_values += 1
+            if is_excel_formula(obj):
+                formula_count += 1
+    
+    count_values(data)
+    
+    if total_values == 0:
+        return False
+        
+    formula_ratio = formula_count / total_values
+    return formula_ratio > threshold
+
+
+def get_force_formula_calculation_setting(config: Dict[str, Any]) -> bool:
+    """Get the force_formula_calculation setting from configuration.
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        Boolean indicating whether to force formula calculation (default: False)
+    """
+    return config.get("global_settings", {}).get("force_formula_calculation", False)
 
 
 def normalize_column_name(column_name: str) -> str:

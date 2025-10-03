@@ -15,6 +15,9 @@ import traceback
 import copy
 import base64
 import io
+import hashlib
+import tempfile
+from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 from flask import Flask, request, jsonify, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -44,10 +47,61 @@ from .utils.range_image_logger import setup_range_image_debug_mode
 from .utils.request_handler import RequestPayloadDetector, PayloadParser
 from .job_queue import job_queue, JobStatus
 from .job_handlers import handler_registry
+from .utils.debug_storage import debug_storage
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Startup debug verification
+def verify_debug_storage_on_startup():
+    """Verify debug storage functionality on application startup."""
+    try:
+        print("🔍 STARTUP DEBUG VERIFICATION: Testing debug storage functionality...")
+
+        # Create test debug data
+        test_request_data = {
+            "endpoint": "startup_test",
+            "method": "INTERNAL",
+            "timestamp": datetime.datetime.now().isoformat(),
+            "test_mode": True
+        }
+
+        test_extracted_data = {
+            "startup_verification": True,
+            "debug_storage_test": "success",
+            "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
+        }
+
+        # Try to save test debug data
+        debug_info = debug_storage.save_debug_data(
+            request_data=test_request_data,
+            extracted_data=test_extracted_data,
+            session_id="startup_test",
+            context="startup_verification"
+        )
+
+        if debug_info:
+            print(f"✅ STARTUP DEBUG: Test file saved successfully to {debug_info['path']}")
+            if debug_info.get('public_url'):
+                print(f"🔗 STARTUP DEBUG URL: {debug_info['public_url']}")
+            print("✅ STARTUP DEBUG: Debug storage is working correctly")
+            return True
+        else:
+            print("❌ STARTUP DEBUG: Failed to save test debug data")
+            return False
+
+    except Exception as e:
+        print(f"❌ STARTUP DEBUG ERROR: {e}")
+        return False
+
+# Run startup verification
+verify_debug_storage_on_startup()
+
+# Enable debug saving in production for formula troubleshooting
+ENABLE_DEBUG_SAVING = os.getenv("ENABLE_DEBUG_SAVING", "true").lower() == "true"
+DEBUG_FILE_TTL_HOURS = 1  # Time to live for debug files
+DEBUG_TOKEN = os.getenv("DEBUG_TOKEN", "debug-access-2024")  # Simple token for debug access
 
 # Initialize components
 config_manager = ConfigManager()
@@ -201,8 +255,8 @@ def handle_file_too_large(error):
 @app.before_request
 def before_request():
     """Pre-request authentication and validation."""
-    # Skip authentication for health check
-    if request.endpoint == "health":
+    # Skip authentication for health check and debug endpoints
+    if request.endpoint in ["health", "debug_status", "list_debug_files", "download_debug_file_gcs", "debug_file_info"]:
         return
 
     # Authenticate request
@@ -994,9 +1048,11 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
         # Set URL source for range extraction if SharePoint URL was used
         if sharepoint_excel_url:
             excel_processor._url_file_source = sharepoint_excel_url
+            excel_processor._is_sharepoint_file = True  # Mark as SharePoint file
             logger.info(
                 f"Set SharePoint URL source for range extraction: {sharepoint_excel_url}"
             )
+            logger.info("📁 Processing file from SharePoint - formula calculation may be needed")
 
         # Set debug directory for range images in development mode
         if app_config.get("development_mode", False) and save_files and temp_dir:
@@ -1013,6 +1069,67 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                     extraction_config,
                 )
                 logger.info(f"Successfully extracted data from Excel file")
+
+                # CRITICAL DEBUG TRACKING POINT - Check if we reach debug saving
+                print("🎯 MERGE DEBUG CHECKPOINT: About to save debug data")
+                print(f"🎯 MERGE DEBUG: Session ID = {session_id}")
+                print(f"🎯 MERGE DEBUG: Debug storage enabled = {debug_storage.enabled}")
+                print(f"🎯 MERGE DEBUG: Debug storage object = {type(debug_storage).__name__}")
+
+                # ALWAYS save debug data for every successful extraction
+                print("📊 SAVING DEBUG DATA: Capturing request and extraction data...")
+                try:
+                    print("🔍 DEBUG STEP 1: Capturing request data...")
+                    # Capture comprehensive request data
+                    request_data = capture_request_data("merge")
+                    print(f"✅ DEBUG STEP 1 COMPLETE: Request data captured, keys: {list(request_data.keys())}")
+
+                    print("🔍 DEBUG STEP 2: Adding context to request data...")
+                    # Add additional context to request data
+                    request_data.update({
+                        "session_id": session_id,
+                        "config_provided": extraction_config is not None,
+                        "sharepoint_excel_url": sharepoint_excel_url,
+                        "sharepoint_pptx_url": sharepoint_pptx_url,
+                        "save_files": save_files
+                    })
+                    print("✅ DEBUG STEP 2 COMPLETE: Context added to request data")
+
+                    print("🔍 DEBUG STEP 3: Calling debug_storage.save_debug_data...")
+                    # Save comprehensive debug data
+                    debug_info = debug_storage.save_debug_data(
+                        request_data=request_data,
+                        extracted_data=extracted_data,
+                        session_id=session_id,
+                        context="merge_extraction"
+                    )
+                    print(f"✅ DEBUG STEP 3 COMPLETE: debug_storage.save_debug_data returned: {debug_info is not None}")
+
+                    if debug_info:
+                        logger.info(f"🗂️ Debug data saved to GCS: {debug_info['filename']}")
+                        print(f"🗂️ DEBUG SAVED: gs://{debug_info['bucket']}/{debug_info['path']}")
+
+                        # Add debug info to response
+                        extracted_data["_debug_info"] = {
+                            "message": "Debug data saved to GCS",
+                            "filename": debug_info['filename'],
+                            "bucket": debug_info['bucket'],
+                            "public_url": debug_info.get('public_url'),
+                            "size_bytes": debug_info['size_bytes']
+                        }
+                    else:
+                        logger.warning("⚠️ Failed to save debug data")
+                        print("⚠️ DEBUG SAVE FAILED")
+
+                except Exception as debug_error:
+                    logger.error(f"Debug saving error: {debug_error}")
+                    print(f"❌ DEBUG ERROR: {debug_error}")
+
+                # Still check for formula issues for additional logging
+                from .utils.validation import detect_formula_extraction_issue
+                if detect_formula_extraction_issue(extracted_data):
+                    logger.warning("🚨 FORMULA ISSUES DETECTED in saved debug data")
+                    print("🚨 FORMULA DETECTION: Issues found - check debug file for details")
             except Exception as e:
                 logger.error(f"Failed to extract data from Excel: {e}")
                 return (
@@ -1050,12 +1167,20 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 for sheet_name, sheet_images in images.items():
                     logger.info(f"Sheet {sheet_name} has {len(sheet_images)} images")
                     for img in sheet_images:
-                        logger.debug(f"Image path: {img['path']}")
-                        # Verify the image file exists
-                        if os.path.exists(img["path"]):
-                            logger.debug(f"Verified image exists at: {img['path']}")
+                        if 'path' in img:
+                            # File-based mode (save_files=True)
+                            logger.debug(f"Image path: {img['path']}")
+                            # Verify the image file exists
+                            if os.path.exists(img["path"]):
+                                logger.debug(f"Verified image exists at: {img['path']}")
+                            else:
+                                logger.error(f"Image file does not exist at: {img['path']}")
+                        elif 'data' in img:
+                            # Memory-only mode (save_files=False)
+                            data_size = len(img['data']) if img['data'] else 0
+                            logger.debug(f"Image in memory: {data_size} bytes")
                         else:
-                            logger.error(f"Image file does not exist at: {img['path']}")
+                            logger.debug(f"Image structure: {list(img.keys())}")
         finally:
             excel_processor.close()
 
@@ -1205,6 +1330,8 @@ def merge_files() -> Union[Tuple[Dict[str, Any], int], Any]:
                 cleanup_thread.daemon = True
                 cleanup_thread.start()
 
+            # FINAL DEBUG CHECKPOINT
+            print("🎯 MERGE FINAL CHECKPOINT: About to return successful response")
             logger.info("🔧 EXIT: merge_files() completed successfully - returning response")
             return response
         finally:
@@ -1301,6 +1428,27 @@ def preview_merge() -> Tuple[Dict[str, Any], int]:
                 "configuration_used": extraction_config,
             },
         }
+
+        # ALWAYS save debug data for every successful preview
+        print("📊 PREVIEW DEBUG: Capturing request and preview data...")
+        try:
+            session_id = request.headers.get("X-Session-ID", str(uuid.uuid4())[:8])
+            request_data = capture_request_data("preview")
+            debug_info = debug_storage.save_debug_data(
+                request_data=request_data,
+                extracted_data=preview_response,
+                session_id=session_id,
+                context="merge_preview"
+            )
+            if debug_info:
+                print(f"✅ PREVIEW DEBUG: Saved to {debug_info['path']}")
+                if debug_info.get('public_url'):
+                    print(f"🔗 PREVIEW DEBUG URL: {debug_info['public_url']}")
+            else:
+                print("⚠️ PREVIEW DEBUG: Failed to save debug data")
+        except Exception as debug_e:
+            logger.warning(f"Failed to save preview debug data: {debug_e}")
+            print(f"❌ PREVIEW DEBUG ERROR: {debug_e}")
 
         return preview_response, 200
 
@@ -1813,6 +1961,13 @@ def extract_data_endpoint(
         config_tenant_id = sharepoint_config.get("tenant_id")
         graph_credentials = get_graph_api_credentials(config_tenant_id)
         excel_processor = ExcelProcessor(excel_file, graph_credentials)
+
+        # Mark if this is a SharePoint file
+        if excel_file and hasattr(excel_file, 'filename'):
+            # If excel_file is from SharePoint (BytesIO from request handler)
+            logger.info("📁 Processing Excel file from SharePoint/memory source")
+            excel_processor._is_sharepoint_file = True
+
         try:
             # Get available sheet names for validation
             available_sheets = excel_processor.get_sheet_names()
@@ -1939,6 +2094,26 @@ def extract_data_endpoint(
                     "processing_time_ms": round(processing_time, 2),
                 },
             }
+
+            # ALWAYS save debug data for every successful extraction
+            print("📊 EXTRACT DEBUG: Capturing request and extraction data...")
+            try:
+                request_data = capture_request_data("extract")
+                debug_info = debug_storage.save_debug_data(
+                    request_data=request_data,
+                    extracted_data=response,
+                    session_id=session_id,
+                    context="extract_data"
+                )
+                if debug_info:
+                    print(f"✅ EXTRACT DEBUG: Saved to {debug_info['path']}")
+                    if debug_info.get('public_url'):
+                        print(f"🔗 EXTRACT DEBUG URL: {debug_info['public_url']}")
+                else:
+                    print("⚠️ EXTRACT DEBUG: Failed to save debug data")
+            except Exception as debug_e:
+                logger.warning(f"Failed to save extract debug data: {debug_e}")
+                print(f"❌ EXTRACT DEBUG ERROR: {debug_e}")
 
             return response, 200
 
@@ -2067,6 +2242,137 @@ def diagnose_template() -> Tuple[Dict[str, Any], int]:
         # Clean up temporary files
         if temp_manager:
             temp_manager.cleanup_all()
+
+
+@app.route("/api/v1/debug/list", methods=["GET"])
+def list_debug_files():
+    """List available debug files in GCS."""
+    try:
+        if not ENABLE_DEBUG_SAVING:
+            return jsonify({"error": "Debug access disabled", "files": []}), 404
+
+        # Get limit from query parameter
+        limit = int(request.args.get("limit", 50))
+        limit = min(limit, 100)  # Cap at 100
+
+        # List debug files
+        debug_files = debug_storage.list_debug_files(limit=limit)
+
+        return jsonify({
+            "debug_enabled": True,
+            "total_files": len(debug_files),
+            "files": debug_files,
+            "bucket": debug_storage.bucket_name
+        })
+
+    except Exception as e:
+        logger.error(f"Error listing debug files: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route("/api/v1/debug/download/<filename>", methods=["GET"])
+def download_debug_file_gcs(filename: str):
+    """Download debug file from GCS."""
+    try:
+        if not ENABLE_DEBUG_SAVING:
+            return jsonify({"error": "Debug access disabled"}), 404
+
+        # Security check - ensure filename is safe
+        if not filename.startswith("debug_") or not filename.endswith(".json"):
+            return jsonify({"error": "Invalid filename"}), 400
+
+        # Get file from GCS
+        file_content = debug_storage.get_debug_file(filename)
+        if not file_content:
+            return jsonify({"error": "Debug file not found"}), 404
+
+        # Create in-memory file for download
+        file_stream = io.BytesIO(file_content)
+        file_stream.seek(0)
+
+        logger.info(f"📁 Serving debug file from GCS: {filename}")
+        return send_file(
+            file_stream,
+            mimetype="application/json",
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        logger.error(f"Error serving debug file from GCS: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route("/api/v1/debug/info/<filename>", methods=["GET"])
+def debug_file_info(filename: str):
+    """Get information about a debug file."""
+    try:
+        if not ENABLE_DEBUG_SAVING:
+            return jsonify({"error": "Debug access disabled"}), 404
+
+        # Security check
+        if not filename.startswith("debug_") or not filename.endswith(".json"):
+            return jsonify({"error": "Invalid filename"}), 400
+
+        # Check if file exists
+        file_content = debug_storage.get_debug_file(filename)
+        if not file_content:
+            return jsonify({"error": "Debug file not found"}), 404
+
+        # Parse file to get metadata
+        try:
+            debug_data = json.loads(file_content.decode('utf-8'))
+            metadata = debug_data.get('metadata', {})
+            request_info = debug_data.get('request_info', {})
+            extraction_results = debug_data.get('extraction_results', {})
+
+            return jsonify({
+                "filename": filename,
+                "metadata": metadata,
+                "request_summary": {
+                    "endpoint": request_info.get('endpoint'),
+                    "method": request_info.get('method'),
+                    "timestamp": request_info.get('timestamp'),
+                    "content_type": request_info.get('content_type'),
+                    "files": list(request_info.get('files_info', {}).keys())
+                },
+                "extraction_summary": {
+                    "formula_issues_detected": extraction_results.get('formula_issues_detected'),
+                    "formula_samples": extraction_results.get('formula_samples', []),
+                    "data_size": extraction_results.get('data_size'),
+                    "extracted_sheets": list(extraction_results.get('extracted_data', {}).keys())
+                },
+                "file_size": len(file_content)
+            })
+
+        except json.JSONDecodeError:
+            return jsonify({"error": "Invalid JSON in debug file"}), 500
+
+    except Exception as e:
+        logger.error(f"Error getting debug file info: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route("/api/v1/debug/status", methods=["GET"])
+def debug_status():
+    """Get debug system status and configuration."""
+    try:
+        return jsonify({
+            "debug_enabled": ENABLE_DEBUG_SAVING,
+            "storage_backend": os.getenv("STORAGE_BACKEND", "LOCAL"),
+            "debug_bucket": debug_storage.bucket_name,
+            "debug_service_enabled": debug_storage.enabled,
+            "environment": {
+                "development_mode": os.getenv("DEVELOPMENT_MODE", "false"),
+                "save_files": os.getenv("SAVE_FILES", "false"),
+                "force_formula_calculation": os.getenv("FORCE_FORMULA_CALCULATION", "false"),
+                "clean_excel_quotes": os.getenv("CLEAN_EXCEL_QUOTES", "true")
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting debug status: {e}")
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @app.route("/api/v1/update", methods=["POST"])
@@ -2330,6 +2636,39 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
                 # This should never happen due to earlier validation
                 raise ValidationError(f"Unknown operation: {operation}")
 
+            # ALWAYS save debug data for every successful update
+            print("📊 UPDATE DEBUG: Capturing request and update data...")
+            try:
+                session_id = request.headers.get("X-Session-ID", str(uuid.uuid4())[:8])
+                request_data = capture_request_data("update")
+
+                # Create update result summary for debug data
+                update_result = {
+                    "operation": operation,
+                    "operation_successful": True,
+                    "updated_file_path": str(updated_path),
+                    "download_name": f"{operation}_{excel_file.filename}",
+                    "sheet_names": sheet_names,
+                    "include_update_log": include_update_log,
+                    "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
+                }
+
+                debug_info = debug_storage.save_debug_data(
+                    request_data=request_data,
+                    extracted_data=update_result,
+                    session_id=session_id,
+                    context="excel_update"
+                )
+                if debug_info:
+                    print(f"✅ UPDATE DEBUG: Saved to {debug_info['path']}")
+                    if debug_info.get('public_url'):
+                        print(f"🔗 UPDATE DEBUG URL: {debug_info['public_url']}")
+                else:
+                    print("⚠️ UPDATE DEBUG: Failed to save debug data")
+            except Exception as debug_e:
+                logger.warning(f"Failed to save update debug data: {debug_e}")
+                print(f"❌ UPDATE DEBUG ERROR: {debug_e}")
+
             # Return updated file
             return send_file(
                 updated_path,
@@ -2350,6 +2689,154 @@ def update_excel_file() -> Union[Tuple[Dict[str, Any], int], Any]:
     finally:
         if temp_manager:
             temp_manager.cleanup_old_directories()
+
+
+def capture_request_data(endpoint: str) -> Dict[str, Any]:
+    """Capture comprehensive request data for debugging (excluding file content).
+
+    Args:
+        endpoint: Name of the endpoint being called
+
+    Returns:
+        Dictionary with request information
+    """
+    try:
+        # Basic request info
+        request_data = {
+            "endpoint": endpoint,
+            "method": request.method,
+            "content_type": request.content_type,
+            "content_length": request.content_length,
+            "headers": dict(request.headers),
+            "url": request.url,
+            "remote_addr": request.remote_addr,
+            "user_agent": request.headers.get("User-Agent", ""),
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+
+        # Form data (excluding files)
+        if request.form:
+            form_data = {}
+            for key, value in request.form.items():
+                # Don't include large form fields that might be base64 data
+                if len(str(value)) < 1000:  # Limit to reasonable size
+                    form_data[key] = value
+                else:
+                    form_data[key] = f"<large_field_truncated_{len(str(value))}_chars>"
+            request_data["form_data"] = form_data
+
+        # Files info (metadata only, not content)
+        if request.files:
+            files_info = {}
+            for key, file in request.files.items():
+                if file and file.filename:
+                    files_info[key] = {
+                        "filename": file.filename,
+                        "content_type": file.content_type,
+                        "content_length": getattr(file, 'content_length', 'unknown')
+                    }
+            request_data["files_info"] = files_info
+
+        # JSON data (if applicable and not too large)
+        try:
+            if request.is_json and request.content_length and request.content_length < 10000:
+                request_data["json_data"] = request.get_json()
+        except:
+            pass
+
+        # Query parameters
+        if request.args:
+            request_data["query_params"] = dict(request.args)
+
+        return request_data
+
+    except Exception as e:
+        logger.error(f"Failed to capture request data: {e}")
+        return {
+            "endpoint": endpoint,
+            "error": str(e),
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+
+
+def cleanup_old_debug_files():
+    """Clean up debug files older than TTL hours."""
+    if not ENABLE_DEBUG_SAVING:
+        return
+
+    try:
+        debug_dir = "/tmp/debug"
+        if not os.path.exists(debug_dir):
+            return
+
+        current_time = datetime.datetime.now()
+        ttl_delta = timedelta(hours=DEBUG_FILE_TTL_HOURS)
+
+        for filename in os.listdir(debug_dir):
+            filepath = os.path.join(debug_dir, filename)
+            if os.path.isfile(filepath):
+                file_time = datetime.datetime.fromtimestamp(os.path.getmtime(filepath))
+                if current_time - file_time > ttl_delta:
+                    os.remove(filepath)
+                    logger.debug(f"Cleaned up old debug file: {filename}")
+    except Exception as e:
+        logger.debug(f"Error cleaning up debug files: {e}")
+
+
+def save_debug_data_production(data: Dict[str, Any], session_id: str = None, context: str = "extraction") -> Optional[Dict[str, str]]:
+    """Save debug data in production environment (Google Cloud Functions).
+
+    Args:
+        data: Data to save for debugging
+        session_id: Unique session identifier
+        context: Context of the debug save (e.g., 'formula_detection', 'extraction')
+
+    Returns:
+        Dictionary with debug file information or None if saving failed
+    """
+    if not ENABLE_DEBUG_SAVING:
+        return None
+
+    try:
+        # Clean up old files first
+        cleanup_old_debug_files()
+
+        # Create debug directory in /tmp (Cloud Functions writable area)
+        debug_dir = "/tmp/debug"
+        os.makedirs(debug_dir, exist_ok=True)
+
+        # Generate unique filename with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_id = session_id or str(uuid.uuid4())[:8]
+        filename = f"debug_{context}_{timestamp}_{session_id}.json"
+        filepath = os.path.join(debug_dir, filename)
+
+        # Save data to file
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+
+        # Generate access token for this file
+        file_token = hashlib.sha256(f"{filename}:{DEBUG_TOKEN}".encode()).hexdigest()[:16]
+
+        logger.info(f"📁 Debug data saved to: {filepath}")
+        logger.info(f"📁 Access via: /api/v1/debug/{filename}?token={file_token}")
+
+        # Also use print for Cloud Functions console visibility
+        print(f"🔍 DEBUG FILE SAVED: {filename}")
+        print(f"🔍 DEBUG ACCESS URL: /api/v1/debug/{filename}?token={file_token}")
+
+        return {
+            "filename": filename,
+            "filepath": filepath,
+            "token": file_token,
+            "url": f"/api/v1/debug/{filename}?token={file_token}",
+            "timestamp": timestamp,
+            "context": context
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to save debug data: {e}")
+        return None
 
 
 def save_debug_info(extracted_data, images, temp_dir, base_filename):
@@ -2751,6 +3238,12 @@ def merge_cli(
 
         # Process Excel file
         excel_processor = ExcelProcessor(excel_file, graph_credentials)
+
+        # Check if excel_file is from SharePoint (BytesIO from request handler)
+        if excel_file and not isinstance(excel_file, str):
+            logger.info("📁 Processing Excel file from memory/SharePoint source")
+            excel_processor._is_sharepoint_file = True
+
         try:
             # Extract data from Excel
             try:

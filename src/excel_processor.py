@@ -30,6 +30,9 @@ from .utils.validation import (
     is_empty_cell_value,
     clean_excel_text_value,
     get_clean_quotes_setting,
+    is_excel_formula,
+    detect_formula_extraction_issue,
+    get_force_formula_calculation_setting,
 )
 from .excel_range_exporter import ExcelRangeExporter, create_range_configs_from_dict
 from .config_schema_validator import validate_config_file
@@ -62,6 +65,7 @@ class ExcelProcessor:
         self._memory_file = None
         self._image_cache = {}
         self._range_exporter = None
+        self._is_sharepoint_file = False  # Track if file is from SharePoint
 
         # Store Graph API credentials for later initialization
         self._graph_credentials = graph_credentials
@@ -205,6 +209,79 @@ class ExcelProcessor:
             f"({error_count} errors encountered)"
         )
 
+    def _reload_workbook_for_formula_calculation(self) -> bool:
+        """Reload workbook with formula calculation enabled if needed.
+
+        Returns:
+            True if workbook was successfully reloaded, False otherwise
+        """
+        try:
+            logger.info("🔄 FORMULA CALCULATION: Attempting to reload workbook")
+            logger.info(f"🔄 File type: {'Memory/SharePoint' if self._is_memory_file else 'File path'}")
+            logger.info(f"🔄 Current data_only mode: True (formulas not calculated)")
+            logger.info(f"🔄 Switching to data_only=False to attempt formula calculation")
+
+            if self._is_memory_file and self._memory_file:
+                # For memory files, reload from the stored memory file
+                logger.info("🔄 Reloading from memory buffer...")
+                self._memory_file.seek(0)
+                new_workbook = load_workbook(self._memory_file, data_only=False, read_only=False)
+
+                # Try to calculate formulas (this doesn't always work with openpyxl)
+                logger.info(f"🔄 Attempting to calculate formulas in {len(new_workbook.sheetnames)} sheets...")
+                for sheet_name in new_workbook.sheetnames:
+                    worksheet = new_workbook[sheet_name]
+                    try:
+                        # Force recalculation by accessing all formula cells
+                        formula_count = 0
+                        for row in worksheet.iter_rows():
+                            for cell in row:
+                                if cell.data_type == 'f':  # Formula cell
+                                    _ = cell.value  # This might trigger calculation
+                    except Exception as e:
+                        logger.debug(f"Formula calculation attempt failed for sheet {sheet_name}: {e}")
+                
+                # Now reload with data_only=True to get calculated values
+                logger.info("🔄 Reloading workbook with data_only=True to read calculated values...")
+                self._memory_file.seek(0)
+                self.workbook = load_workbook(self._memory_file, data_only=True)
+                logger.info("✅ Workbook reloaded successfully")
+                
+            elif self.file_path:
+                # For file-based processing, reload from file
+                logger.info("🔄 Reloading from file path...")
+                new_workbook = load_workbook(self.file_path, data_only=False, read_only=False)
+
+                # Try to calculate formulas
+                logger.info(f"🔄 Attempting to calculate formulas in {len(new_workbook.sheetnames)} sheets...")
+                for sheet_name in new_workbook.sheetnames:
+                    worksheet = new_workbook[sheet_name]
+                    try:
+                        formula_count = 0
+                        for row in worksheet.iter_rows():
+                            for cell in row:
+                                if cell.data_type == 'f':  # Formula cell
+                                    formula_count += 1
+                                    _ = cell.value
+                        if formula_count > 0:
+                            logger.debug(f"   Sheet '{sheet_name}': Found {formula_count} formula cells")
+                    except Exception as e:
+                        logger.debug(f"Formula calculation attempt failed for sheet {sheet_name}: {e}")
+
+                # Reload with data_only=True
+                logger.info("🔄 Reloading workbook with data_only=True to read calculated values...")
+                self.workbook = load_workbook(self.file_path, data_only=True)
+                logger.info("✅ Workbook reloaded successfully")
+            logger.info("✅ Formula calculation reload completed successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to reload workbook for formula calculation: {e}")
+            logger.error(f"❌ Error type: {type(e).__name__}")
+            import traceback
+            logger.debug(f"❌ Stack trace: {traceback.format_exc()}")
+            return False
+
     def get_sheet_names(self) -> List[str]:
         """Get list of sheet names in the workbook."""
         if not self.workbook:
@@ -229,6 +306,16 @@ class ExcelProcessor:
         """
         # Store clean_quotes setting for use in extraction methods
         self._clean_quotes = get_clean_quotes_setting(full_config or {})
+
+        # Store force_formula_calculation setting
+        self._force_formula_calculation = get_force_formula_calculation_setting(full_config or {})
+
+        # Log extraction settings for debugging
+        logger.info("📊 EXCEL EXTRACTION SETTINGS:")
+        logger.info(f"  - force_formula_calculation: {self._force_formula_calculation}")
+        logger.info(f"  - clean_excel_quotes: {self._clean_quotes}")
+        logger.info(f"  - is_sharepoint_file: {getattr(self, '_is_sharepoint_file', False)}")
+        logger.info(f"  - is_memory_file: {self._is_memory_file}")
         try:
             # CRITICAL DEBUG: Entry point logging to confirm server is running updated code
             logger.info("=" * 80)
@@ -365,6 +452,53 @@ class ExcelProcessor:
             # Add range images to extracted data if any were found
             if range_images:
                 extracted_data["_range_images"] = range_images
+
+            # Check for formula extraction issues and attempt recovery
+            if detect_formula_extraction_issue(extracted_data):
+                logger.warning("🚨 FORMULA DETECTION: Extracted data contains formulas instead of calculated values!")
+                logger.warning("🚨 This indicates Excel formulas were not properly evaluated during extraction")
+
+                # Log sample of detected formulas for debugging
+                self._log_formula_samples(extracted_data)
+
+                if self._force_formula_calculation:
+                    logger.info("🔄 FORMULA CALCULATION ENABLED: Attempting to reload workbook and recalculate formulas...")
+                    logger.info(f"🔄 File source: {'SharePoint' if getattr(self, '_is_sharepoint_file', False) else 'Local/Direct'}")
+                    
+                    if self._reload_workbook_for_formula_calculation():
+                        logger.info("🔄 Workbook reloaded successfully, re-extracting data...")
+                        
+                        # Re-extract data with the reloaded workbook
+                        retry_extracted_data = {}
+                        for sheet_name, config in sheet_config.items():
+                            if sheet_name not in self.workbook.sheetnames:
+                                continue
+                                
+                            worksheet = self.workbook[sheet_name]
+                            sheet_images = all_images.get(sheet_name, [])
+                            sheet_data = self._process_sheet(worksheet, config, sheet_images)
+                            normalized_sheet_name = normalize_column_name(sheet_name)
+                            retry_extracted_data[normalized_sheet_name] = sheet_data
+                        
+                        # Check if the retry resolved the formula issue
+                        if not detect_formula_extraction_issue(retry_extracted_data):
+                            logger.info("✅ Formula calculation retry succeeded! Using recalculated data.")
+                            extracted_data = retry_extracted_data
+                            if range_images:
+                                extracted_data["_range_images"] = range_images
+                        else:
+                            logger.warning("⚠️ Formula calculation retry still shows formulas.")
+                            logger.info("🔧 Attempting manual formula resolution as fallback...")
+                            self._attempt_manual_formula_resolution(retry_extracted_data)
+                            extracted_data = retry_extracted_data
+                            if range_images:
+                                extracted_data["_range_images"] = range_images
+                    else:
+                        logger.warning("⚠️ Failed to reload workbook for formula calculation")
+                else:
+                    logger.info("💡 Formula calculation is DISABLED. Set 'force_formula_calculation: true' in global_settings to enable.")
+                    logger.info("🔧 Attempting manual formula resolution without reload...")
+                    self._attempt_manual_formula_resolution(extracted_data)
 
             return extracted_data
 
@@ -1891,6 +2025,127 @@ class ExcelProcessor:
         # Clean up memory file and image cache
         self._memory_file = None
         self._image_cache = {}
+
+    def _log_formula_samples(self, data: Dict[str, Any], max_samples: int = 5) -> None:
+        """Log sample formula values found in extracted data for debugging.
+
+        Args:
+            data: Extracted data dictionary
+            max_samples: Maximum number of formula samples to log
+        """
+        samples = []
+
+        def find_formulas(obj, path=""):
+            nonlocal samples
+            if len(samples) >= max_samples:
+                return
+
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    find_formulas(value, f"{path}.{key}" if path else key)
+            elif isinstance(obj, list):
+                for idx, item in enumerate(obj):
+                    find_formulas(item, f"{path}[{idx}]")
+            elif isinstance(obj, str) and obj.startswith("="):
+                samples.append((path, obj))
+
+        find_formulas(data)
+
+        if samples:
+            logger.info(f"📊 FORMULA SAMPLES DETECTED ({len(samples)} found):")
+            for path, formula in samples[:max_samples]:
+                logger.info(f"   - Path: {path} -> Formula: {formula}")
+        else:
+            logger.info("📊 No formula samples found in data")
+
+    def _attempt_manual_formula_resolution(self, data: Dict[str, Any]) -> None:
+        """Attempt to manually resolve simple cell reference formulas.
+
+        This handles formulas like =SheetName!Cell by looking up the referenced cell.
+
+        Args:
+            data: Dictionary to update with resolved values (modified in place)
+        """
+        resolved_count = 0
+        failed_count = 0
+
+        def resolve_formulas(obj, parent=None, key=None):
+            nonlocal resolved_count, failed_count
+
+            if isinstance(obj, dict):
+                for k, v in list(obj.items()):
+                    resolve_formulas(v, obj, k)
+            elif isinstance(obj, list):
+                for idx, item in enumerate(obj):
+                    resolve_formulas(item, obj, idx)
+            elif isinstance(obj, str) and obj.startswith("="):
+                # Try to resolve simple cell references like =SheetName!Cell
+                resolved_value = self._resolve_cell_reference(obj)
+                if resolved_value is not None and resolved_value != obj:
+                    logger.debug(f"✅ Resolved formula '{obj}' to '{resolved_value}'")
+                    if parent is not None and key is not None:
+                        parent[key] = resolved_value
+                    resolved_count += 1
+                else:
+                    logger.debug(f"❌ Could not resolve formula: {obj}")
+                    failed_count += 1
+
+        logger.info("🔧 Starting manual formula resolution...")
+        resolve_formulas(data)
+        logger.info(f"🔧 Formula resolution complete: {resolved_count} resolved, {failed_count} failed")
+
+    def _resolve_cell_reference(self, formula: str) -> Optional[Any]:
+        """Resolve a simple cell reference formula to its value.
+
+        Args:
+            formula: Formula string like '=SheetName!A1' or '=A1'
+
+        Returns:
+            Resolved value or None if resolution fails
+        """
+        if not formula.startswith("="):
+            return None
+
+        try:
+            # Remove the = sign
+            ref = formula[1:].strip()
+
+            # Handle sheet references like SheetName!Cell
+            if "!" in ref:
+                sheet_name, cell_ref = ref.split("!", 1)
+                # Remove quotes if present
+                sheet_name = sheet_name.strip("'\"")
+
+                if sheet_name in self.workbook.sheetnames:
+                    worksheet = self.workbook[sheet_name]
+                    cell = worksheet[cell_ref]
+                    value = cell.value
+
+                    # Apply quote cleaning if enabled
+                    if self._clean_quotes:
+                        value = clean_excel_text_value(value, self._clean_quotes)
+
+                    logger.debug(f"📍 Resolved {formula} -> {value} (from sheet '{sheet_name}')")
+                    return value
+                else:
+                    logger.debug(f"⚠️ Sheet '{sheet_name}' not found for formula {formula}")
+            else:
+                # Simple cell reference without sheet (use active sheet)
+                if self.workbook.active:
+                    cell = self.workbook.active[ref]
+                    value = cell.value
+
+                    # Apply quote cleaning if enabled
+                    if self._clean_quotes:
+                        value = clean_excel_text_value(value, self._clean_quotes)
+
+                    logger.debug(f"📍 Resolved {formula} -> {value} (from active sheet)")
+                    return value
+
+        except Exception as e:
+            logger.debug(f"❌ Error resolving formula {formula}: {e}")
+
+        return None
 
     def _detect_image_format(self, image_data: bytes) -> str:
         """Detect image format from binary data.

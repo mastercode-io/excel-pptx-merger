@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "global_settings": {
+    "force_formula_calculation": true,
+    "clean_excel_quotes": true,
+    "validation": {
+      "strict_mode": false,
+      "allow_empty_values": true
+    }
+  },
+  "sheet_configs": {
+    "Results Overview": {
+      "subtables": [
+        {
+          "name": "platform_results",
+          "type": "table",
+          "header_search": {
+            "method": "contains_text",
+            "text": "Platform",
+            "column": "A",
+            "search_range": "A1:C20"
+          },
+          "data_extraction": {
+            "orientation": "horizontal",
+            "headers_row_offset": 0,
+            "data_row_offset": 1,
+            "max_rows": 10,
+            "column_mappings": {
+              "Platform": {
+                "name": "platform",
+                "type": "text"
+              },
+              "Total Results Flagged": {
+                "name": "total_results",
+                "type": "number"
+              },
+              "On This Report": {
+                "name": "on_report",
+                "type": "number"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
