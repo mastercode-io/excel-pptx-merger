@@ -327,16 +327,11 @@ class GraphAPIClient:
             # Check if this URL requires the Shares API (Doc.aspx format or sharing link)
             if parsed.get("requires_shares_api", False):
                 logger.info(f"🌐 Using Shares API for URL type: {parsed.get('url_type')}")
-                
-                # For sharing links, we already have the share token
-                if parsed.get("url_type") == "sharing_link":
-                    share_token = parsed.get("share_token")
-                    logger.info(f"🔑 Using share token from URL: {share_token}")
-                    drive_item_info = self._get_driveitem_from_share_token(share_token)
-                else:
-                    # For Doc.aspx URLs, encode the full URL
-                    drive_item_info = self.get_driveitem_from_sharing_url(sharepoint_url)
-                
+
+                # For all Shares API URLs (sharing links and Doc.aspx), encode the full URL
+                # The Microsoft Graph Shares API requires the full URL to be base64-encoded
+                drive_item_info = self.get_driveitem_from_sharing_url(sharepoint_url)
+
                 item_id = drive_item_info["item_id"]
                 logger.info(f"✅ Shares API resolved to item ID: {item_id}")
                 return item_id
